@@ -41,8 +41,9 @@ class FeatureExtractor(nn.Module):
         mid_level.append(x)  # Mid-level: complex textures
 
         # High-level features (semantics)
+        high_level = []
         x = self.layer3(x)   # [B, 256, H/16, W/16]
-        high_level = [x]
+        high_level.append(x)
         x = self.layer4(x)   # [B, 512, H/32, W/32]
         high_level.append(x) # High-level: semantics
 
