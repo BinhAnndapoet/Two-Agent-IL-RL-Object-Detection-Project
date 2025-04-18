@@ -48,8 +48,8 @@ class VOC2012Dataset(Dataset):
         bboxes, labels = self._parse_annotation(annotation_path)
 
         # Apply augmentation (only for training)
-        if self.split == 'train':
-            img_tensor, bboxes, labels = augment_data(img_tensor, bboxes, labels)
+        # if self.split == 'train':
+        #     img_tensor, bboxes, labels = augment_data(img_tensor, bboxes, labels)
 
         return {
             'image': img_tensor,
