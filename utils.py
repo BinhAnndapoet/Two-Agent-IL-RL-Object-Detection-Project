@@ -8,10 +8,10 @@ class Replay_Buffer():
             minsize: The minimum size of the replay buffer before the agent starts learning
             batchsize: The batch size used for training
     """
-    def __init__(self, env, fullsize=BUFFER_SIZE, minsize=MIN_REPLAY_SIZE, batchsize=BATCH_SIZE):
+    def __init__(self):
       pass
 
-    def append(self, transition):
+    def append(self):
       pass
 
     def sample_batch(self):
@@ -19,5 +19,5 @@ class Replay_Buffer():
     def initialize(self):
       pass
 
-def iou(bbox1, target_bbox):
+def iou():
   pass
