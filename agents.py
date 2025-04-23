@@ -85,19 +85,7 @@ class DQNAgent():
             Args:
                 path (str): The path to save the model to
         """
-        # Creating the directory if it does not exist
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        # Saving the model
-        torch.save(self.policy_net.state_dict(), path + "/policy_net.pth")
-        torch.save(self.target_net.state_dict(), path + "/target_net.pth")
-
-        # Saving optimizer state
-        torch.save(self.optimizer.state_dict(), path + "/optimizer.pth")
-
-        # Saving the episode info
-        np.save(path + "/episode_info.npy", self.episode_info)
+        pass:
 
     def load(self, path="models/dqn"):
         """ Function to load the model 
