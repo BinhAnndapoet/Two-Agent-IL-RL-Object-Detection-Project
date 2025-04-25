@@ -89,15 +89,24 @@ class DQNAgent():
         
     def update(self):
         """ Updates the policy network using a batch of transitions """
-      pass
+        # Sampling a batch of transitions from the replay buffer
+        states, actions, rewards, dones, next_states = self.replay_buffer.sample_batch()  # sample.batch() from utils
+
+        # Converting the tensors to cuda tensors
+        states = states.to(device)
+        actions = actions.to(device)
+        rewards = rewards.to(device)
+        dones = dones.to(device)
+        next_states = next_states.to(device)
+
             
     def update_epsilon(self):
         """ Updates epsilon """
-      pass
+        self.epsilon = max(EPS_END, EPS_DECAY * self.epsilon)
 
     def train(self):
         """ Trains the agent for nsteps steps """
-      pass
+        pass
 
     def explicit_train(self, decode=False):
         """ Trains the agent for nsteps steps """
@@ -105,7 +114,11 @@ class DQNAgent():
 
     def run(self):
         """ Runs the agent """
-      pass
+        # Initialising the replay buffer
+        self.replay_buffer.initialize()
+
+        # Training the agent
+        self.train()
 
     def evaluate(self, path="evaluation_results"):
         """ Evaluates the agent """
