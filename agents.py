@@ -1,3 +1,10 @@
+from models import *
+from utils import *
+
+import torch
+import torch.nn as nn
+import random
+
 class DQNAgent():
     """
         The DQN agent that interacts with the environment
@@ -32,12 +39,45 @@ class DQNAgent():
             display_every_n_episodes: The number of episodes after which the results are displayed
             time: The time taken to run the agent
     """
-    def __init__(self):
-      pass
+    def __init__(self, env, replay_buffer, target_update_freq=TARGET_UPDATE_FREQ, exploration_mode=EXPLORATION_MODE, network=DQN):
+      self.env = env
+      self.replay_buffer = replay_buffer
+      self.target_update_freq = target_update_freq
+      self.exploration_mode = exploration_mode
+      self.ninputs = 
+      self.noutputs = 
+      self.policy_net = network(self.ninputs, self.noutputs).to(device)
+      self.target_net = network(self.ninputs, self.noutputs).to(device)
+      self.target_net.load_state_dict(self.policy_net.state_dict())
+      self.target_net.eval()
+      self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr= ALPHA)
+      self.criterion = nn.SmoothL1Loss()
+      self.epsilon = EPS_START
+      self.steps_done = 0
+      self.episodes = 0
+      self.episode_info = 
+      self.display_every_n_episodes = 10000
       
-    def select_action(self):
+    def select_action(self, state, agent_type="center"):
         """ Selects an action using an epsilon greedy policy """
-      pass
+        # Selecting a random action with probability epsilon
+        if random.random() <= self.epsilon: # Exploration
+            if self.exploration_mode == GUIDED_EXPLORE: # Guided exploration
+                # Expert agent action selection
+                action = self.expert_agent_action_selection(state, agent_type)
+            else:# Random exploration
+                # Normal Random action Selection
+                action = self.env.action_space.sample() if agent_type == "center" else self.env.action_space_size.sample()
+        else: # Exploitation
+            # Selecting the action with the highest Q-value otherwise
+            with torch.no_grad():
+                if agent_type == "center":
+                    state = torch.cat([state["image"], state["features"]], dim=1).to(device)
+                else:
+                    state = torch.cat([state["image_patch"], state["features_patch"]], dim=1).to(device)
+                qvalues = self.policy_net(state)
+                action = qvalues.argmax().item()
+        return action
     
     def expert_agent_action_selection(self):
         """ Selects an action using an expert agent, by calculating the reward for each action and selecting a random action from the positive actions if the list is not empty, otherwise selecting a random action from the negative actions.
@@ -98,3 +138,24 @@ class DQNAgent():
     def get_episode_info(self):
         """ Returns the episode info """
       pass
+
+
+class CenterAgent(DQNAgent):
+    """ The Center Agent that interacts with the environment and inherits from the DQN agent """
+  def __init__():
+    pass
+    
+  def update(self):
+    """ Updates the policy network using a batch of transitions """
+      pass
+
+
+class SizeAgent(DQNAgent):
+    """ The Size Agent that interacts with the environment and inherits from the DQN agent """
+  def __init__():
+    pass
+    
+  def update(self):
+    """ Updates the policy network using a batch of transitions """
+      pass
+    
