@@ -1,3 +1,25 @@
+import torch
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+# The target update frequency is the frequency with which the target network is updated.
+TARGET_UPDATE_FREQ = 5
+
+# Epsilon start, epsilon end and epsilon decay are the parameters for the epsilon greedy exploration strategy.
+EPS_START = 1.0
+EPS_END = 0.01
+EPS_DECAY = 0.999
+
+# Exploration Modes
+RANDOM_EXPLORE = 0
+GUIDED_EXPLORE = 1
+# Setting Exploration Mode
+EXPLORATION_MODE = RANDOM_EXPLORE
+
+# The learning rate α ∈ (0, 1] controls how much we update our current value estimates towards newly received returns.
+ALPHA = 1e-4
+
+
 class Replay_Buffer():
     """
         The replay buffer stores the transitions that the agent observes, allowing us to reuse this data later.
