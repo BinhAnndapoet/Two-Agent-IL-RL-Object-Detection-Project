@@ -1,161 +1,301 @@
 from gymnasium import Env, spaces
 import gymnasium as gym
+import numpy as np
+import cv2
 
 
-"""
-    Detection Environment
-    
-    The environment is used to define the environment for the SaRLVision agent. Environment inherits from the gymnaisum environment.
-"""
+# Constants
+NUMBER_OF_ACTIONS = 5       # 4 ops + trigger
+ALPHA = 0.2                 # movement/resize scale
+NU = 3.0                    # trigger reward factor
+THRESHOLD = 0.6             # IoU threshold for trigger
+MAX_STEPS = 200             # max steps per episode
+TRIGGER_STEPS = 40          # steps before trigger allowed
+ACTION_HISTORY_SIZE = 10    # number of past actions to remember
+SINGLE_OBJ = 0
+MULTI_OBJ = 1
+OBJ_CONFIGURATION = SINGLE_OBJ   # default single-object
+RENDER_MODE = None          # default render mode
+
+# box format: [x1, y1, x2, y2]
+def calculate_iou(box1, box2):
+    """
+    Compute IoU between two bounding boxes.
+
+    Args:
+        box1 (list[int]): [x1, y1, x2, y2] first box coordinates.
+        box2 (list[int]): [x1, y1, x2, y2] second box coordinates.
+
+    Returns:
+        float: IoU value between 0 and 1.
+    """
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter_w = max(0, x2 - x1)
+    inter_h = max(0, y2 - y1)
+    inter_area = inter_w * inter_h
+    area1 = max(0, (box1[2] - box1[0])) * max(0, (box1[3] - box1[1]))
+    area2 = max(0, (box2[2] - box2[0])) * max(0, (box2[3] - box2[1]))
+    union = area1 + area2 - inter_area
+    return inter_area / union if union > 0 else 0.0
+
 class DetectionEnv(Env):
-    # Metadata for the environment
-    metadata = {"render_modes": ["human", "rgb_array", "bbox", "trigger_image"], "render_fps": 3}
+    """
+        Gym environment for two-agent RL object detection.
+        Agent behavior switches based on `agent_type` ('center' or 'size').
+
+        State:
+            - Normalized bbox coords [x1/w, y1/h, x2/w, y2/h]
+            - Flattened one-hot action history (NUMBER_OF_ACTIONS x ACTION_HISTORY_SIZE)
+
+        Actions (Discrete(NUMBER_OF_ACTIONS)):
+            0: move left/resize width+
+            1: move right/resize width-
+            2: move up/resize height-
+            3: move down/resize height+
+            4: trigger (end)
+    """
     
-    def __init__(self):
+    metadata = {
+        'render_modes' : ['human', 'rgb_array'],
+        'render_fps' : 5        
+    }
+    
+    def __init__(self, env_config={}):
         """
-            Constructor of the DetectionEnv class.
+            Initialize the environment.
 
             Args:
-                - env_config: Dictionary that contains the configuration of the environment.
-                
-            Parameters (env_config):
-                - 'dataset': The path of the dataset ('PascalVOC2007_2012Dataset').
-                - 'dataset_year': The year of the dataset (2007, 2012, or 2007+2012).
-                - 'dataset_image_set': The image set of the dataset (train, val, test).
-                - 'obj_configuration': Whether the environment will use single object or multiple objects (0 for single object, 1 for multiple objects).
-                - 'current_class': The current class to be used in the environment.
-                - 'image': The image to be used in the environment.
-                - 'original_image': The original image to be used in the environment.
-                - 'target_gt_boxes': The target bounding boxes to be used in the environment.
-                - 'target_size': The size of the image that will be used as input to the feature extractor.
-                - 'use_sara': Whether the environment will use the SARA model for initial bounding box prediction (True for using the SARA model, False for not using the SARA model).
-                - 'feature_extractor': The CNN used to extract the features of the image in the environment.
-                - 'max_steps': The maximum number of steps in the environment.
-                - 'trigger_steps': The number of steps before the trigger in the environment.
-                - 'alpha': The scaling factor for bounding box movements in the environment.
-                - 'nu': The trigger reward in the environment.
-                - 'threshold': The IoU threshold for the trigger action positive or negative reward in the environment.
-                - 'classifier': The CNN used to classify the image ROI in the environment.
-                - 'classifier_target_size': The size of the image that will be used as input to the classifier.
-                - 'allow_classification': Whether the environment will allow classification or not (True for allowing classification, False for not allowing classification).
-                - 'render_mode': The render mode of the environment (None, human, trigger_image, bbox, rgb_array).
-                
+                env_config (dict): configuration dict with keys:
+                    - 'agent_type' (str): 'center' or 'size'
+                    - 'image' (np.ndarray): input image array
+                    - 'target_bbox' (list of int): ground-truth box [x1,y1,x2,y2]
+                    - 'alpha' (float, optional): movement/resize scale
+                    - 'nu' (float, optional): trigger reward factor
+                    - 'threshold' (float, optional): IoU threshold
+                    - 'max_steps' (int, optional): max steps per episode
+                    - 'trigger_steps' (int, optional): min steps before trigger
+                    - 'obj_configuration' (int, optional): SINGLE_OBJ or MULTI_OBJ
+        """
+        super().__init__()
+        # agent type: 'center' or 'size'
+        self.agent_type = env_config.pop('agent_type', None)
+        
+        # requires input
+        self.image = env_config.pop('image', None)
+        self.gt_box = env_config.pop("target_bbox", None)
+        self.original_image = self.image.copy()
+        
+        # hyperparameters
+        self.alpha      = env_config.pop('alpha', ALPHA)
+        self.nu         = env_config.pop('nu', NU)
+        self.threshold  = env_config.pop('threshold', THRESHOLD)
+        self.max_steps  = env_config.pop('max_steps', MAX_STEPS)
+        self.trigger_steps = env_config.pop('trigger_steps', TRIGGER_STEPS)
+        self.obj_configuration = env_config.pop('obj_configuration', OBJ_CONFIGURATION)
+        
+        # image dimension
+        h, w = self.image.shape[:2]
+        self.width = w
+        self.height = h
+        
+        # action history buffer init
+        self.action_history = [[0]*NUMBER_OF_ACTIONS for _ in range(ACTION_HISTORY_SIZE)]
+        
+        # init episode
+        self.reset()
+        
+        # action & observation spaces
+        self.action_space = spaces.Discrete(NUMBER_OF_ACTIONS)
+        obs_size = 4 + NUMBER_OF_ACTIONS * ACTION_HISTORY_SIZE
+        self.observation_space = spaces.Box(0.0, 1.0, shape=(obs_size,), dtype=np.float32)
+
+    def reset(self,  *, seed=None, options=None):
+        """
+            Reset environment to initial state.
+
             Returns:
-                - None
-        """
-        super(DetectionEnv, self).__init__()
-        pass
-
-    def train(self):
-        """
-            Function that sets the environment mode to training.
-        """
-        pass
-
-    def test(self):
-        """
-            Function that sets the environment mode to testing.
+                obs (np.ndarray): initial observation
+                info (dict): empty info dict
         """
         
-        pass
-
-    def eval(self):
-        """
-            Function that sets the environment mode to testing.
-        """
+        # full-image bbox
+        self.bbox = [0, 0, self.width, self.height]
+        self.step_count = 0
+        self.trigger_count = 0
+        self.cumulative_reward = 0.0
+        self.done = False
         
-        pass
-
-    def calculate_reward(self):
-        """
-            Calculating the reward.
-
-            Input:
-                - Current state
-                - Previous state
-                - Target bounding box
-                - Reward function
-
-            Output:
-                - Reward
-        """
-        pass
-    
-    def calculate_trigger_reward(self):
-        """
-            Calculating the reward.
-
-            Input:
-                - Current state
-                - Target bounding box
-                - Reward function
-
-            Output:
-                - Reward
-        """
-        pass
-    
-    def get_features(self):
-        """
-            Getting the features of the image.
-
-            Input:
-                - Image
-                - Data type
-
-            Output:
-                - Features of the image
-        """
-        pass
+        # clear history
+        self.action_history = [[0] * NUMBER_OF_ACTIONS for _ in range(ACTION_HISTORY_SIZE)]
+        return self.get_state(), {}
     
     def get_state(self):
         """
-            Getting the state of the environment.
+            Construct state vector from current bbox and action history.
+
+            Returns:
+                np.ndarray: state of shape (4 + N_actions * history_size,)
+        """
+        x1, y1, x2, y2 = self.bbox
+        norm = [x1/self.width, y1/self.height, x2/self.width, y2/self.height] # chuẩn hóa về 0, 1
+        hist = [bit for vec in self.action_history for bit in vec]
+        return np.array(norm + hist, dtype=np.float32)
+    
+    def update_history(self, action):
+        """
+            Append last action to history buffer (one-hot), pop oldest.
 
             Args:
-                - dtype: Data type
-
-            Output:
-                - State of the environment
+                action (int): action index in [0, NUMBER_OF_ACTIONS-1]
         """
-        pass
+        self.action_history.pop(0)
+        onehot = [0]*NUMBER_OF_ACTIONS
+        onehot[action] = 1
+        self.action_history.append(onehot)
     
-    def update_history(self):
+    def transform_action(self, action):
         """
-            Function that updates the history of the actions by adding the last one.
-            It is creating a history vector of size 9, where each element is 0 except the one corresponding to the action performed.
-            It is then shifting the history vector by one and adding the new action vector to the history vector.
+            Apply movement or resize to self.bbox based on action.
 
-            Input:
-                - Last action performed
-
-            Output:
-                - History of the actions
+            Args:
+                action (int): in {0,1,2,3}
+            Returns:
+                list of int: new bbox [x1,y1,x2,y2]
         """
-        pass
+        x1,y1,x2,y2 = self.bbox
+        w,h = x2-x1, y2-y1
+        dx,dy = int(self.alpha*w), int(self.alpha*h)
+        
+        # center agent
+        if self.agent_type=='center':
+            if action==0: 
+                x1-=dx
+                x2-=dx
+            elif action==1: 
+                x1+=dx
+                x2+=dx
+            elif action==2: 
+                y1-=dy
+                y2-=dy
+            elif action==3: 
+                y1+=dy
+                y2+=dy
+        
+        # size agent
+        else:  
+            if action==0: 
+                x1-=dx
+                x2+=dx
+            elif action==1: 
+                x1+=dx
+                x2-=dx
+            elif action==2:
+                y1-=dy
+                y2+=dy
+            elif action==3:
+                y1+=dy
+                y2-=dy
+        # clamp
+        return [
+            max(0,x1), 
+            max(0,y1), 
+            min(self.width,x2), 
+            min(self.height,y2)
+        ]
 
-    def transform_action(self):
+
+    def calculate_reward(self, prev_bbox: list, curr_bbox: list = None, target_bbox: list = None, reward_fn = calculate_iou):
         """
-            Function that applies the action to the image.
+            Reward for a non-trigger action:
+                +1 if IoU(curr, GT) > IoU(prev, GT)
+                -1 otherwise
 
-            Actions:
-                - 0: Move right
-                - 1: Move left
-                - 2: Move up
-                - 3: Move down
-                - 4: Make bigger
-                - 5: Make smaller
-                - 6: Make fatter
-                - 7: Make taller
+            Args:
+                prev_bbox   (list[int]): bbox before action
+                curr_bbox   (list[int], optional): bbox after action (defaults to self.bbox)
+                target_bbox (list[int], optional): ground-truth box (defaults to self.gt_box)
+                reward_fn   (callable, optional): function to compute IoU
 
-            Input:
-                - Action to apply
+            Returns:
+                float: +1.0 or -1.0
+        """
+        
+        if curr_bbox is None:
+            curr_bbox = self.bbox
+        if target_bbox is None:
+            target_bbox = self.gt_box
 
-            Output:
-                - Bounding box of the image
+        iou_prev = reward_fn(prev_bbox, target_bbox)
+        iou_curr = reward_fn(curr_bbox, target_bbox)
+        return 1.0 if iou_curr > iou_prev else -1.0
+        
+    
+    def calculate_trigger_reward(self, curr_bbox: list = None, target_bbox: list = None, reward_fn = calculate_iou):
         
         """
-        pass
+            Reward for trigger action: if IoU>=threshold, +2*nu*iou, else -nu.
+
+            Returns:
+                float: reward_value
+        """
+        iou = calculate_iou(self.bbox, self.gt_box)
+        return (self.nu*2*iou) if iou>=self.threshold else -self.nu
+
+    def step(self, action):
+        """
+            Take one step in the environment.
+
+            Args:
+                action (int): chosen action from action_space
+            Returns:
+                obs, reward, done, truncated, info
+        """
+        self.update_history(action)
+
+        if action == NUMBER_OF_ACTIONS-1:  # trigger
+            if self.step_count < self.trigger_steps:
+                reward = -1.0
+            else:
+                reward = self.calculate_trigger_reward()
+                self.trigger_count += 1
+                if self.obj_configuration==SINGLE_OBJ:
+                    self.done = True
+        else:
+            prev = self.bbox.copy()
+            self.bbox     = self.transform_action(action)
+            reward        = self.calculate_reward(prev)
+            self.step_count += 1
+            if self.step_count >= self.max_steps:
+                self.done = True
+
+        self.cumulative_reward += reward
+        return self.get_state(), reward, self.done, False, {}
+    
+    def render(self, mode='human'):
+        """
+        Render current bbox on the original image.
+
+        Args:
+            mode (str): 'human' to show window, 'rgb_array' to return image
+        Returns:
+            np.ndarray: rendered frame
+        """
+        img = self.original_image.copy()
+        x1,y1,x2,y2 = self.bbox
+        cv2.rectangle(img, (x1,y1), (x2,y2), (0,255,0), 2)
+        if mode=='human':
+            cv2.imshow('CustomEnv', img)
+            cv2.waitKey(1)
+        return img
+
+    def close(self):
+        """
+        Close any opened render windows.
+        """
+        cv2.destroyAllWindows()
     
     def get_actions(self):
         """
@@ -211,27 +351,7 @@ class DetectionEnv(Env):
         """
         pass
     
-    def reset(self):
-        """
-            Function that resets the environment.
-
-            Args:
-                - env_config: Dictionary that contains the configuration of the environment.
-                - seed: Seed for the environment.
-                - options: Options for the environment.
-                
-            Parameters (env_config):
-                - 'image': The image to be used in the environment.
-                - 'original_image': The original image to be used in the environment.
-                - 'target_bbox': The target bounding box to be used in the environment.
-                - 'target_gt_boxes': The target bounding boxes to be used in the environment.
-                - 'classifier': The CNN used to classify the image ROI in the environment.
-                - 'classifier_target_size': The size of the image that will be used as input to the classifier.
-                
-            Output:
-                - State and information of the environment
-        """
-        pass
+    
     
     def get_labels(self):
         """
@@ -261,36 +381,9 @@ class DetectionEnv(Env):
             Function that restarts the environment and changes the state.
         """
         pass
-        
-    def draw_ior_cross(self):
-        """
-            Function that draws an IoR (Inhibition of Return) cross on the image based on the current bounding box.
 
-            Args:
-                - Image
-                - Bounding box
-                - Color
-                - Thickness
-
-            Output:
-                - Image with the IoR cross
-        """
-        pass
     
-    def step(self):
-        """
-            Function that performs an action on the environment.
-
-            Input:
-                - Action to perform
-
-            Output:
-                - State of the environment
-                - Reward of the action
-                - Whether the episode is finished or not
-                - Information of the environment
-        """
-        pass
+    
     
     def decode_render_action(self):
         """
@@ -319,18 +412,6 @@ class DetectionEnv(Env):
         """
         pass
 
-    def render(self):
-        """
-            Function that renders the environment.
-
-            Args:
-                - Mode: Mode of rendering (human, trigger_image, bbox, rgb_array)
-                - Close: Whether to close the environment or not
-
-            Output:
-                - Image
-        """
-        pass
     
     def display(self):
         """
@@ -347,175 +428,6 @@ class DetectionEnv(Env):
                 - Image of the environment
         """
         pass
-        
-    def segment(self):
-        """
-            Function that segments the object in the bounding box.
-
-            Note: This function is used for segmentation tasks and is incomplete and not precise as it is a work in progress.
-
-            Args:
-                - Display_mode: Mode of display (mask, contour, None)
-                - Do_display: Whether to display the image or not
-                - Do_save: Whether to save the image or not
-                - Save_path: Path to save the image
-                - Text_display: Whether to display the text or not
-                - Alpha: Alpha value for blending the image with the rectangle
-                - Color: Color of the bounding box
-
-            Output:
-                - Segmentation dictionary
-
-        """
-        pass
     
-    def annotate(self):
-        """
-            Function which utilise the Mask to Annotation software to annotate an object mask in an image.
 
-            Note: This function is a wrapper for the Mask to Annotation software (IEEE ISM 2023) (https://github.com/dylanseychell/mask-to-annotation)
-
-            Args:
-                - Image: Image to annotate
-                - Id: Id of the image
-                - Title: Title of the image
-                - Project_name: Name of the project
-                - Save_dir: Directory to save the annotation
-                - Category: Category of the object
-                - Annotation_format: Format of the annotation (coco, vgg, yolo)
-                - Do_display: Whether to display the image or not
-                - Do_save: Whether to save the image or not
-                - Do_print: Whether to print the annotation or not
-                - Annotation_color: Color of the annotation
-                - Epsilon: Epsilon value for polygon approximation
-                - Configuration: Configuration for the annotation
-                - Object_configuration: Object configuration for the annotation
-                - Do_cvt: Whether to convert the annotation or not
-        """
-        pass
-        
-    def plot_img(self):
-        """
-            Function that plots the image.
-
-            Args:
-                - Image: Image to plot
-                - Title: Title of the image
-                - Figure_size: Size of the figure
-        """
-        pass
-       
-    def plot_multiple_imgs(self):
-        """
-            Function that plots multiple images.
-
-            Args:
-                - Images: Images to plot
-                - Rows: Number of rows
-                - Cols: Number of columns
-                - Figure_size: Size of the figure
-
-        """
-        
-        
-    def close(self):
-        """
-            Function that closes the environment.
-        """
-        
-        pass
     
-    def load_pascal_voc_dataset(self):
-        """
-            Function that loads the Pascal VOC dataset.
-
-            Args:
-                - Path: Path to the dataset
-                - Year: Year of the dataset (2007, 2012)
-                - Download: Whether to download the dataset or not
-                - Image_set: Image set of the dataset (train, val, test)
-
-            Output:
-                - Dataset
-        """
-        pass
-    
-    def load_training_dataset(self):
-        """
-            Function that loads the Pascal VOC 2007 + 2012 dataset.
-
-            Args:
-                - Path: Path to the dataset
-                - Download: Whether to download the dataset or not
-                - Image_set: Image set of the dataset (train, val, test)
-
-            Output:
-                - Dataset
-        """
-        pass
-    
-    def sort_pascal_voc_by_class(self):    
-        """
-            Function that sorts the Pascal VOC dataset by class, by iterating through the dataset and adding the images to the corresponding class.
-
-            Input:
-                - Datasets
-            
-            Output:
-                - Dictionary of datasets (keys: classes, values: all the data of this class)
-        """
-        pass
-    
-    def extract(self):
-        """
-            Function that extracts the current image, original image and target bounding box from the dataset.
-        """        
-        
-        pass
-
-    def save_evaluation_results(self):
-        """
-            Function that saves the evaluation results to a file.
-
-            Args:
-                - Path: Path to save the evaluation results
-        """
-        pass
-
-    def load_evaluation_results(self):
-        """
-            Function that loads the evaluation results from a file.
-
-            Args:
-                - Path: Path to load the evaluation results
-        """
-        
-        pass
-    
-    def filter_bboxes(self):
-        """
-            Function that filters the bounding boxes and adds them to the evaluation results.
-        """
-        pass
-        
-    def generate_initial_bbox(self):
-        """
-            Function that generates an initial bounding box prediction based on Saliency Ranking.
-
-            Args:
-                - Threshold: Threshold for the Saliency Ranking algorithm
-                - Iterations: Number of iterations for the Saliency Ranking algorithm
-
-            Output:
-                - Initial bounding box prediction
-        """
-        pass
-    
-    def plot_sara(self):
-        """
-            Function that plots the Saliency Ranking algorithm.
-
-            Args:
-                - Threshold: Threshold for the Saliency Ranking algorithm
-        """
-        pass
