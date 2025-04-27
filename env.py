@@ -77,7 +77,7 @@ class BaseDetectionEnv(Env, ABC):
     """  
         * Abstract base env for sequetial object detection. Configured via `env_config` dict.
         
-        * Atributes:
+        * Attributes:
             + img(np.array)                     : input RGB images
             + gt_bbox(list[float])              : ground_size scale
             + nu(float)                         : trigger reward factor
@@ -288,7 +288,7 @@ class BaseDetectionEnv(Env, ABC):
                 reward = -1.0
             else:
                 # 2.2: Compute IoU and assign trigger reward or penalty
-                iou = calculate_iou(self.bbox, self.gt_box)
+                iou = calculate_iou(self.bbox, self.gt_bbox)
                 if iou >= self.threshold:
                     reward = 2 * self.nu * iou
                 else:
@@ -313,7 +313,7 @@ class BaseDetectionEnv(Env, ABC):
         # step 4: Build next observation and info
         obs = self._get_state()
         info = {
-            'iou': calculate_iou(self.bbox, self.gt_box),
+            'iou': calculate_iou(self.bbox, self.gt_bbox),
             'step': self.step_count,
             'triggered': (action == self.action_space.n - 1)
         }
