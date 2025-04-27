@@ -1,433 +1,375 @@
+"""
+    Custom Gymnasium environments for two-agent sequential object detection using Imitation Learning + Deep Q-Learning.
+
+    Modules:
+        - calculate_iou: utility for computing IoU between two bounding boxes.
+        - BaseDetectionEnv: abstract base class providing common logic and Gymnasium API (reset, step, rendering, history management).
+        - CenterEnv: concrete environment for Center Agent (predicts object center, class, confidence, done).
+        - SizeEnv: concrete environment for Size Agent (refines object size and confidence).
+
+    Based on proposal:
+        - Two sequential agents (center then size) operate on full-image or patch state.
+        - Action spaces and rewards match design: movement/resize, trigger, class/conf/done.
+        - State includes normalized bbox coords, history vector, image/patch input.
+
+    Hyperparameters are defined at module-level and collected in HYPERPARAMETERS dict. 
+    They can be overridden via the `env_config` passed to constructors; missing keys fall back to defaults.
+"""
+
+from abc import ABC, abstractmethod
 from gymnasium import Env, spaces
 import gymnasium as gym
 import numpy as np
 import cv2
 
+# Default hyperparameters and action-space sizes
+DEFAULT_ALPHA           = 0.2       # Fraction of bbox width/height to move/resize per action
+DEFAULT_NU              = 3.0       # Scaling factor for trigger reward magnitude
+DEFAULT_THRESHOLD       = 0.6       # IoU threshold above which triggering yields positive reward
+DEFAULT_MAX_STEPS       = 200       # Max number of non-trigger actions before episode truncation
+DEFAULT_TRIGGER_STEPS   = 40        # Minimum steps before trigger action is considered valid
+DEFAULT_HISTORY_SIZE    = 10        # Number of past base actions to include in state history
+DEFAULT_OBJ_CONFIG      = 0         # Object configuration: 0=SINGLE_OBJ, 1=MULTI_OBJ
+DEFAULT_PATCH_SIZE      = 64        # Size (height and width) of image patch for SizeEnv
 
-# Constants
-NUMBER_OF_ACTIONS = 5       # 4 ops + trigger
-ALPHA = 0.2                 # movement/resize scale
-NU = 3.0                    # trigger reward factor
-THRESHOLD = 0.6             # IoU threshold for trigger
-MAX_STEPS = 200             # max steps per episode
-TRIGGER_STEPS = 40          # steps before trigger allowed
-ACTION_HISTORY_SIZE = 10    # number of past actions to remember
-SINGLE_OBJ = 0
-MULTI_OBJ = 1
-OBJ_CONFIGURATION = SINGLE_OBJ   # default single-object
-RENDER_MODE = None          # default render mode
 
-# box format: [x1, y1, x2, y2]
-def calculate_iou(box1, box2):
+# Default sizes of discrete action spaces (from proposal):
+"""  
+    - For BaseDetectionEnv: Number of base move/resize actions before trigger (common)
+    - For CenterEnv: 4 base movement actions + trigger + 10 class prediction + 3 confidence bins + 2 done flags = 24 total
+    - For SizeEnv: 4 resize actions + trigger + 3 conf bins + 4 aspect choices + 1 done flag? (simplified to 12)
+"""
+DEFAULT_CENTER_ACTIONS  = 24        # 4 move + 1 trigger + 10 class + 3 conf + 2 done
+DEFAULT_SIZE_ACTIONS    = 12        # 4 resize + 1 trigger + 3 conf + 4 aspect
+DEFAULT_BASE_ACTIONS    = 4         # Number of base move/resize actions before trigger
+
+
+def calculate_iou(bbox1, bbox2):
+    """  
+        * Args:
+            - bbox1 (list[float]) : [x1, y1, x2, y2] - first bbox coordinates
+            - bbox2 (list[float]) : [x1, y1, x2, y2] - second bbox coordinates
+        * Returns:
+            - float: IoU = area(intersection) / area(union), in [0.0, 1.0]
     """
-    Compute IoU between two bounding boxes.
-
-    Args:
-        box1 (list[int]): [x1, y1, x2, y2] first box coordinates.
-        box2 (list[int]): [x1, y1, x2, y2] second box coordinates.
-
-    Returns:
-        float: IoU value between 0 and 1.
-    """
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = max(bbox1[2], bbox2[2])
+    y2 = max(bbox1[3], bbox2[3])
+    
     inter_w = max(0, x2 - x1)
-    inter_h = max(0, y2 - y1)
+    inter_h = max(y2 - y1)
     inter_area = inter_w * inter_h
-    area1 = max(0, (box1[2] - box1[0])) * max(0, (box1[3] - box1[1]))
-    area2 = max(0, (box2[2] - box2[0])) * max(0, (box2[3] - box2[1]))
+    
+    area1 = max(0, (bbox1[2] - bbox1[0])) * max(0, (bbox1[3] - bbox1[1]))
+    area2 = max(0, (bbox2[2] - bbox2[0])) * max(0, (bbox2[3] - bbox2[1]))
     union = area1 + area2 - inter_area
-    return inter_area / union if union > 0 else 0.0
-
-class DetectionEnv(Env):
-    """
-        Gym environment for two-agent RL object detection.
-        Agent behavior switches based on `agent_type` ('center' or 'size').
-
-        State:
-            - Normalized bbox coords [x1/w, y1/h, x2/w, y2/h]
-            - Flattened one-hot action history (NUMBER_OF_ACTIONS x ACTION_HISTORY_SIZE)
-
-        Actions (Discrete(NUMBER_OF_ACTIONS)):
-            0: move left/resize width+
-            1: move right/resize width-
-            2: move up/resize height-
-            3: move down/resize height+
-            4: trigger (end)
-    """
     
-    metadata = {
-        'render_modes' : ['human', 'rgb_array'],
-        'render_fps' : 5        
-    }
+    if union > 0: 
+        IoU = (inter_area / union)
+    else:
+        IoU = 0.0    
     
-    def __init__(self, env_config={}):
-        """
-            Initialize the environment.
+    return IoU
 
-            Args:
-                env_config (dict): configuration dict with keys:
-                    - 'agent_type' (str): 'center' or 'size'
-                    - 'image' (np.ndarray): input image array
-                    - 'target_bbox' (list of int): ground-truth box [x1,y1,x2,y2]
-                    - 'alpha' (float, optional): movement/resize scale
-                    - 'nu' (float, optional): trigger reward factor
-                    - 'threshold' (float, optional): IoU threshold
-                    - 'max_steps' (int, optional): max steps per episode
-                    - 'trigger_steps' (int, optional): min steps before trigger
-                    - 'obj_configuration' (int, optional): SINGLE_OBJ or MULTI_OBJ
-        """
-        super().__init__()
-        # agent type: 'center' or 'size'
-        self.agent_type = env_config.pop('agent_type', None)
+
+class BaseDetectionEnv(Env, ABC):
+    """  
+        * Abstract base env for sequetial object detection. Configured via `env_config` dict.
         
-        # requires input
-        self.image = env_config.pop('image', None)
-        self.gt_box = env_config.pop("target_bbox", None)
-        self.original_image = self.image.copy()
+        * Atributes:
+            + img(np.array)                     : input RGB images
+            + gt_bbox(list[float])              : ground_size scale
+            + nu(float)                         : trigger reward factor
+            + threshold(float)                  : IoU cutoff for trigger reward
+            + max_steps (int)                   : maximun steps before valid trigger
+            + history_size(int)                 : length of action history.
+            + n_base_history(int)               : number of move/resize ops (4).
+            + action_history(list[list[int]])   : sliding window of one-hot base actions
+            + obj_config(int)                   : SINGLE_OBJ or MULTI_OBJ mode.
+            + patch_size(int)                   : dimension for crop in SizeEnv.
+            + center_actions(int)               : total actions in CenterEnv.
+            + size_actions(int)                 : total actions in SizeEnv.
+        
+        * Common method:
+            + reset()                           : initialize esiode variables and return initial state.
+            + step(action)                      : apply action, compute reward, return (obs, reward, done, truncated, info)
+            + render(mode)                      : visualize bbox on image
+            + close()                           : close render windows
+            
+        * Method to override:
+            + _init_space()                     : configure action_space and observation_space of each agent
+            + _get_state()                      : return current state represation
+            + _calc_reward(pred_bbox, curr_bbox): compute reward for non-trigger 
+    """
+    
+    
+    def __init__(self, env_config:dict):
+        super().__init__()
+        
+        # requires configuration keys
+        self.image              = env_config['image']
+        self.gt_bbox            = env_config['target_bbox']
+        self.agent_type         = env_config['agent_type'] # center or size
         
         # hyperparameters
-        self.alpha      = env_config.pop('alpha', ALPHA)
-        self.nu         = env_config.pop('nu', NU)
-        self.threshold  = env_config.pop('threshold', THRESHOLD)
-        self.max_steps  = env_config.pop('max_steps', MAX_STEPS)
-        self.trigger_steps = env_config.pop('trigger_steps', TRIGGER_STEPS)
-        self.obj_configuration = env_config.pop('obj_configuration', OBJ_CONFIGURATION)
+        self.alpha              = env_config.get('alpha', DEFAULT_ALPHA)
+        self.nu                 = env_config.get('nu', DEFAULT_NU)
+        self.threshold          = env_config.get('threshold', DEFAULT_THRESHOLD)
+        self.max_steps          = env_config.get('max_steps', DEFAULT_MAX_STEPS)
+        self.trigger_steps      = env_config.get('trigger_steps', DEFAULT_TRIGGER_STEPS)
+        self.history_size       = env_config.get('history_size', DEFAULT_HISTORY_SIZE)
+        self.obj_config         = env_config.get('obj_config', DEFAULT_OBJ_CONFIG)
+        self.patch_size         = env_config.get('patch_size', DEFAULT_PATCH_SIZE)
         
-        # image dimension
-        h, w = self.image.shape[:2]
-        self.width = w
-        self.height = h
+        # Action-space sizes
+        self.center_actions     = env_config.get('center_actions', DEFAULT_CENTER_ACTIONS)
+        self.size_actions       = env_config.get('size_actions', DEFAULT_SIZE_ACTIONS)
+        self.base_actions       = env_config.get('base_actions', DEFAULT_BASE_ACTIONS)
         
-        # action history buffer init
-        self.action_history = [[0]*NUMBER_OF_ACTIONS for _ in range(ACTION_HISTORY_SIZE)]
+        # Internal state
+        self.height, self.width = self.image.shape[:2]
+        self.action_history     = [[0] * self.base_actions for _ in range(self.history_size)]
         
-        # init episode
+        # Initialize action/observation spaces and reset
+        self._init_spaces()
         self.reset()
+    
+    
+    @abstractmethod
+    def _init_spaces(self):
+        """Define action_space and observation_space. Must be implemented by subclasses."""
+        raise NotImplementedError
+    
+    
+    @abstractmethod
+    def _get_state(self):
+        """Return current observation: image/patch tensor + history channels."""
+        raise NotImplementedError
+    
+    
+    @abstractmethod
+    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
+        """Compute reward for non-trigger actions."""
+        raise NotImplementedError
         
-        # action & observation spaces
-        self.action_space = spaces.Discrete(NUMBER_OF_ACTIONS)
-        obs_size = 4 + NUMBER_OF_ACTIONS * ACTION_HISTORY_SIZE
-        self.observation_space = spaces.Box(0.0, 1.0, shape=(obs_size,), dtype=np.float32)
-
+    
+    # After *: keyword-only paramters
     def reset(self,  *, seed=None, options=None):
         """
             Reset environment to initial state.
 
-            Returns:
-                obs (np.ndarray): initial observation
-                info (dict): empty info dict
+            * Args:
+                + seed (int, optional): random seed for environment.
+                + options (dict, optional): additional reset options.
+
+            * Returns:
+                + obs (np.ndarray): initial observation state.
+                + info (dict): auxiliary information (empty by default).
         """
         
         # full-image bbox
         self.bbox = [0, 0, self.width, self.height]
         self.step_count = 0
         self.trigger_count = 0
-        self.cumulative_reward = 0.0
         self.done = False
         
         # clear history
-        self.action_history = [[0] * NUMBER_OF_ACTIONS for _ in range(ACTION_HISTORY_SIZE)]
-        return self.get_state(), {}
+        self.action_history = [[0] * self.base_actions for _ in range(self.history_size)]
+        
+        return self._get_state(), {}
     
-    def get_state(self):
+    
+    def _update_history(self, action_idx:int):
         """
-            Construct state vector from current bbox and action history.
+            Update sliding window of past base actions.
+            * Args:
+                + action_idx (int): index of the last performed base action.
 
-            Returns:
-                np.ndarray: state of shape (4 + N_actions * history_size,)
+            * Returns:
+                + None
         """
+        
+        self.action_history.pop(0)          # erase the lastest action in action_history
+        one_hot = [0] * self.base_actions   # create new list one hot
+        if action_idx < self.base_actions:  # check if action_idx in [0, base_action - 1] 
+            one_hot[action_idx] = 1
+        self.action_history.append(one_hot)
+        
+    
+    def _transform_action(self, action:int):
+        """
+            Updated coordinates of bbox by applied move or resized to the bounding box based on the action and alpha.
+
+            * Computes step sizes dx, dy as fractions of current bbox width and height:
+                    + dx = int(alpha * width)
+                    + dy = int(alpha * height)
+                    
+            * For 'center' agent: moves the bbox by (dx, dy) in one of four directions.
+            * For 'size' agent  : expands or contracts the bbox dimensions by dx or dy.
+            
+            * Args:
+                + action (int): index of the action to apply.
+
+            * Returns:
+                + new_bbox (list[int]): updated bounding box [x1, y1, x2, y2].
+        """
+        
         x1, y1, x2, y2 = self.bbox
-        norm = [x1/self.width, y1/self.height, x2/self.width, y2/self.height] # chuẩn hóa về 0, 1
-        hist = [bit for vec in self.action_history for bit in vec]
-        return np.array(norm + hist, dtype=np.float32)
-    
-    def update_history(self, action):
-        """
-            Append last action to history buffer (one-hot), pop oldest.
-
-            Args:
-                action (int): action index in [0, NUMBER_OF_ACTIONS-1]
-        """
-        self.action_history.pop(0)
-        onehot = [0]*NUMBER_OF_ACTIONS
-        onehot[action] = 1
-        self.action_history.append(onehot)
-    
-    def transform_action(self, action):
-        """
-            Apply movement or resize to self.bbox based on action.
-
-            Args:
-                action (int): in {0,1,2,3}
-            Returns:
-                list of int: new bbox [x1,y1,x2,y2]
-        """
-        x1,y1,x2,y2 = self.bbox
-        w,h = x2-x1, y2-y1
-        dx,dy = int(self.alpha*w), int(self.alpha*h)
+        w   = x2-x1,
+        h   = y2-y1
+        dx  = int(self.alpha*w) # horizontal step (pixels)
+        dy  = int(self.alpha*h) # vertical   step (pixels)
         
-        # center agent
-        if self.agent_type=='center':
-            if action==0: 
-                x1-=dx
-                x2-=dx
-            elif action==1: 
-                x1+=dx
-                x2+=dx
-            elif action==2: 
-                y1-=dy
-                y2-=dy
-            elif action==3: 
-                y1+=dy
-                y2+=dy
+        # center agent (moves the entire bounding box in four directions: left, right, up, down)
+        if self.agent_type == 'center':
+            if action == 0:       # move left
+                x1 -= dx
+                x2 -= dx
+            elif action == 1:     # move right
+                x1 += dx
+                x2 += dx
+            elif action == 2:     # move up
+                y1 -= dy
+                y2 -= dy
+            elif action == 3:     # move down
+                y1 += dy
+                y2 += dy
         
-        # size agent
+        # size agent (expands or contracts the bounding box dimensions horizontally or vertically)
         else:  
-            if action==0: 
-                x1-=dx
-                x2+=dx
-            elif action==1: 
-                x1+=dx
-                x2-=dx
-            elif action==2:
-                y1-=dy
-                y2+=dy
-            elif action==3:
-                y1+=dy
-                y2-=dy
+            if action == 0:       # expand horizontal dimension 
+                x1 -= dx
+                x2 += dx
+            elif action == 1:     # contract horizontal dimension
+                x1 += dx
+                x2 -= dx
+            elif action == 2:     # expand vertical dimension
+                y1 -= dy
+                y2 += dy
+            elif action == 3:     # contract vertical dimension
+                y1 += dy
+                y2 -= dy
+        
         # clamp
-        return [
-            max(0,x1), 
-            max(0,y1), 
-            min(self.width,x2), 
-            min(self.height,y2)
-        ]
-
-
-    def calculate_reward(self, prev_bbox: list, curr_bbox: list = None, target_bbox: list = None, reward_fn = calculate_iou):
-        """
-            Reward for a non-trigger action:
-                +1 if IoU(curr, GT) > IoU(prev, GT)
-                -1 otherwise
-
-            Args:
-                prev_bbox   (list[int]): bbox before action
-                curr_bbox   (list[int], optional): bbox after action (defaults to self.bbox)
-                target_bbox (list[int], optional): ground-truth box (defaults to self.gt_box)
-                reward_fn   (callable, optional): function to compute IoU
-
-            Returns:
-                float: +1.0 or -1.0
-        """
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(self.width, x2), min(self.height, y2)
         
-        if curr_bbox is None:
-            curr_bbox = self.bbox
-        if target_bbox is None:
-            target_bbox = self.gt_box
+        return [x1, y1, x2, y2]
 
-        iou_prev = reward_fn(prev_bbox, target_bbox)
-        iou_curr = reward_fn(curr_bbox, target_bbox)
-        return 1.0 if iou_curr > iou_prev else -1.0
-        
-    
-    def calculate_trigger_reward(self, curr_bbox: list = None, target_bbox: list = None, reward_fn = calculate_iou):
-        
+
+    def step(self, action: int):
         """
-            Reward for trigger action: if IoU>=threshold, +2*nu*iou, else -nu.
+        Execute one environment step given an action.
 
-            Returns:
-                float: reward_value
+        Args:
+            action (int): index of the action to apply. 
+                - 0..(n_base-1): move/resize operations
+                - n_base (last index): trigger action
+
+        Returns:
+            obs (np.ndarray): next observation state (image/patch + history channels).
+            reward (float): scalar reward for the action.
+            done (bool): True if episode ended by valid trigger (and single-object mode).
+            truncated (bool): True if episode ended by exceeding max_steps.
+            info (dict): supplementary info containing:
+                - 'iou': current IoU with ground truth box.
+                - 'step': total non-trigger steps taken.
+                - 'triggered': True if action was the trigger action.
         """
-        iou = calculate_iou(self.bbox, self.gt_box)
-        return (self.nu*2*iou) if iou>=self.threshold else -self.nu
+        # step 1: Record this action in history buffer
+        self._update_history(action)
+        truncated = False
 
-    def step(self, action):
-        """
-            Take one step in the environment.
-
-            Args:
-                action (int): chosen action from action_space
-            Returns:
-                obs, reward, done, truncated, info
-        """
-        self.update_history(action)
-
-        if action == NUMBER_OF_ACTIONS-1:  # trigger
+        # step 2: Handle trigger action (last discrete index)
+        if action == self.action_space.n - 1:
+            # 2.1: If triggered too early, apply penalty
             if self.step_count < self.trigger_steps:
                 reward = -1.0
             else:
-                reward = self.calculate_trigger_reward()
+                # 2.2: Compute IoU and assign trigger reward or penalty
+                iou = calculate_iou(self.bbox, self.gt_box)
+                if iou >= self.threshold:
+                    reward = 2 * self.nu * iou
+                else:
+                    reward = -self.nu
+                    
+                # Count triggers and end episode if in single-object mode
                 self.trigger_count += 1
-                if self.obj_configuration==SINGLE_OBJ:
+                if self.obj_config == DEFAULT_OBJ_CONFIG:
                     self.done = True
         else:
-            prev = self.bbox.copy()
-            self.bbox     = self.transform_action(action)
-            reward        = self.calculate_reward(prev)
+            # step 3: Handle move/resize actions
+            prev_bbox = list(self.bbox)                        # save current box
+            self.bbox = self._transform_action(action)         # update box coords
+            reward = self._calc_reward(prev_bbox, self.bbox)   # +1 if IoU improved, else -1
             self.step_count += 1
+            
+            # End if max steps reached
             if self.step_count >= self.max_steps:
+                truncated = True
                 self.done = True
 
-        self.cumulative_reward += reward
-        return self.get_state(), reward, self.done, False, {}
-    
+        # step 4: Build next observation and info
+        obs = self._get_state()
+        info = {
+            'iou': calculate_iou(self.bbox, self.gt_box),
+            'step': self.step_count,
+            'triggered': (action == self.action_space.n - 1)
+        }
+        
+        # step 5: Return step tuple
+        return obs, reward, self.done, truncated, info
+        
+
     def render(self, mode='human'):
         """
-        Render current bbox on the original image.
+            Render bounding box on the original image.
 
-        Args:
-            mode (str): 'human' to show window, 'rgb_array' to return image
-        Returns:
-            np.ndarray: rendered frame
+            * Args:
+                mode (str): 'human' to display window, 'rgb_array' to return image array.
+
+            * Returns:
+                frame (np.ndarray): annotated image frame.
         """
-        img = self.original_image.copy()
-        x1,y1,x2,y2 = self.bbox
-        cv2.rectangle(img, (x1,y1), (x2,y2), (0,255,0), 2)
-        if mode=='human':
-            cv2.imshow('CustomEnv', img)
+        
+        frame = self.image.copy()
+        x1, y1, x2, y2 = self.bbox
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        if mode == 'human':
+            cv2.imshow('DetectionEnv', frame)
             cv2.waitKey(1)
-        return img
+        return frame
+
 
     def close(self):
         """
-        Close any opened render windows.
+            Close any opened render windows.
         """
         cv2.destroyAllWindows()
     
-    def get_actions(self):
-        """
-            Function that prints the name of the actions.
-        """
-        
-        pass
-
-    def decode_action(self):
-        """
-            Function that decodes the action.
-
-            Input:
-                - Action to decode
-
-            Output:
-                - Unique print of the action
-        """
-        
-        pass
-
-    def rewrap(self):
-        """
-            Function that rewrap the coordinate if it is out of the image.
-
-            Input:
-                - Coordinate to rewrap
-                - Size of the image
-
-            Output:
-                - Rewrapped coordinate
-        """
-        pass
     
-    def get_info(self):
-        """
-            Function that returns the information of the environment.
-
-            Output:
-                - Information dictionary of the environment
-        """
-        pass
-    
-    def generate_random_color(self):
-        """
-            Function that generates a random color.
-
-            Input:
-                - Threshold
-
-            Output:
-                - Random color
-        """
+class CenterEnv(BaseDetectionEnv):
+    def _init_spaces(self):
         pass
     
     
-    
-    def get_labels(self):
-        """
-            Function that returns the labels of the images.
-
-            Output:
-                - Labels of the images
-        """
+    def _get_state(self):
         pass
     
-    def predict(self):
-        """
-            Function that predicts the label of the image.
-
-            Args:
-                - do_display: Whether to display the image or not
-                - do_save: Whether to save the image or not
-                - save_path: Path to save the image
-
-            Output:
-                - Image
-        """
+    
+    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
         pass
 
-    def restart_and_change_state(self):
-        """
-            Function that restarts the environment and changes the state.
-        """
-        pass
-
-    
-    
-    
-    def decode_render_action(self):
-        """
-        Function that decodes the action.
-
-        Input:
-            - Action to decode
-
-        Output:
-            - Decoded action as a string
-        """
-        pass
-
-    def _render_frame(self):
-        """
-            Function that renders the environment.
-
-            Args:
-                - Mode: Mode of rendering (human, trigger_image, bbox, rgb_array)
-                - Close: Whether to close the environment or not
-                - Alpha: Alpha value for blending the image with the rectangle
-                - Text_display: Whether to display the text or not
-
-            Output:
-                - Image
-        """
-        pass
-
-    
-    def display(self):
-        """
-            Function that renders the environment.
-
-            Args:
-                - Mode: Mode of rendering (image, trigger_image, bbox, detection, heatmap, None)
-                - Do_display: Whether to display the image or not
-                - Text_display: Whether to display the text or not
-                - Alpha: Alpha value for blending the image with the rectangle
-                - Color: Color of the bounding box
-
-            Output:
-                - Image of the environment
-        """
+class SizeEnv(BaseDetectionEnv):
+    def _init_spaces(self):
         pass
     
-
+    
+    def _get_state(self):
+        pass
+    
+    
+    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
+        pass
     
