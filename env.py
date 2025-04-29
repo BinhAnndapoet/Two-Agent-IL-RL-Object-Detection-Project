@@ -2,15 +2,16 @@
     Custom Gymnasium environments for two-agent sequential object detection using Imitation Learning + Deep Q-Learning.
 
     Modules:
-        - calculate_iou: utility for computing IoU between two bounding boxes.
-        - BaseDetectionEnv: abstract base class providing common logic and Gymnasium API (reset, step, rendering, history management).
-        - CenterEnv: concrete environment for Center Agent (predicts object center, class, confidence, done).
-        - SizeEnv: concrete environment for Size Agent (refines object size and confidence).
+    - calculate_iou: utility for computing IoU between two bounding boxes.
+    - BaseDetectionEnv: abstract base class providing common Gym API (reset, step, render, close) and history management.
+    - CenterEnv: environment for Center Agent (adjust center of bbox).
+    - SizeEnv: environment for Size Agent (adjust size of bbox).
 
     Based on proposal:
-        - Two sequential agents (center then size) operate on full-image or patch state.
-        - Action spaces and rewards match design: movement/resize, trigger, class/conf/done.
-        - State includes normalized bbox coords, history vector, image/patch input.
+        - Two sequential agents: center then size, acting on full-image state.
+        - Action spaces: base move/resize and trigger.
+        - Rewards: IoU improvement for IL expert, trigger reward based on IoU threshold.
+        - State: normalized bbox coordinates + history of past base actions.
 
     Hyperparameters are defined at module-level and collected in HYPERPARAMETERS dict. 
     They can be overridden via the `env_config` passed to constructors; missing keys fall back to defaults.
@@ -30,7 +31,6 @@ DEFAULT_MAX_STEPS       = 200       # Max number of non-trigger actions before e
 DEFAULT_TRIGGER_STEPS   = 40        # Minimum steps before trigger action is considered valid
 DEFAULT_HISTORY_SIZE    = 10        # Number of past base actions to include in state history
 DEFAULT_OBJ_CONFIG      = 0         # Object configuration: 0=SINGLE_OBJ, 1=MULTI_OBJ
-DEFAULT_PATCH_SIZE      = 64        # Size (height and width) of image patch for SizeEnv
 
 
 # Default sizes of discrete action spaces (from proposal):
@@ -97,10 +97,10 @@ class BaseDetectionEnv(Env, ABC):
             + render(mode)                      : visualize bbox on image
             + close()                           : close render windows
             
-        * Method to override:
+        * Abstract -> Method to override:
             + _init_space()                     : configure action_space and observation_space of each agent
             + _get_state()                      : return current state represation
-            + _calc_reward(pred_bbox, curr_bbox): compute reward for non-trigger 
+            + calculate_reward()                : compute reward for non-trigger 
     """
     
     
@@ -120,7 +120,6 @@ class BaseDetectionEnv(Env, ABC):
         self.trigger_steps      = env_config.get('trigger_steps', DEFAULT_TRIGGER_STEPS)
         self.history_size       = env_config.get('history_size', DEFAULT_HISTORY_SIZE)
         self.obj_config         = env_config.get('obj_config', DEFAULT_OBJ_CONFIG)
-        self.patch_size         = env_config.get('patch_size', DEFAULT_PATCH_SIZE)
         
         # Action-space sizes
         self.center_actions     = env_config.get('center_actions', DEFAULT_CENTER_ACTIONS)
@@ -130,10 +129,13 @@ class BaseDetectionEnv(Env, ABC):
         # Internal state
         self.height, self.width = self.image.shape[:2]
         self.action_history     = [[0] * self.base_actions for _ in range(self.history_size)]
+        self.step_count = 0
+        self.trigger_count = 0
+        self.done = False
+        self.epochs = 0
         
-        # Initialize action/observation spaces and reset
+        # Initialize action/observation spaces
         self._init_spaces()
-        self.reset()
     
     
     @abstractmethod
@@ -144,29 +146,56 @@ class BaseDetectionEnv(Env, ABC):
     
     @abstractmethod
     def _get_state(self):
-        """Return current observation: image/patch tensor + history channels."""
+        """
+        Build and return current raw observation as 1D numpy array.
+
+        Returns:
+            np.ndarray: shape (D,), where D = 4 + history_size*base_actions.
+        """
         raise NotImplementedError
     
     
     @abstractmethod
-    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
-        """Compute reward for non-trigger actions."""
+    def calculate_reward(self, new_bbox, prev_bbox: list, target_bboxes: list) -> float:
+        """
+            Abstract reward function used by IL expert and RL.
+
+            Args:
+                new_bbox (list[int]): bbox after action.
+                prev_bbox (list[int]): bbox before action.
+                target_bboxes (list): ground-truth bbox(es).
+            Returns:
+                float: reward value.
+        """
         raise NotImplementedError
+    
+    
+    def get_state(self) -> np.array:
+        """
+            Return current observation with batch dimension for agent.
+
+            Returns:
+                np.ndarray: shape (1, D).
+        """
+        raw = self._get_state()
+        return raw.reshape(1, -1)
         
     
     # After *: keyword-only paramters
     def reset(self,  *, seed=None, options=None):
         """
-            Reset environment to initial state.
+            Reset environment to initial state for new episode
 
             * Args:
                 + seed (int, optional): random seed for environment.
                 + options (dict, optional): additional reset options.
 
             * Returns:
-                + obs (np.ndarray): initial observation state.
+                + obs (np.ndarray): initial observation state - raw state (no batch dim)
                 + info (dict): auxiliary information (empty by default).
         """
+        
+        self.epochs += 1
         
         # full-image bbox
         self.bbox = [0, 0, self.width, self.height]
@@ -197,7 +226,7 @@ class BaseDetectionEnv(Env, ABC):
         self.action_history.append(one_hot)
         
     
-    def _transform_action(self, action:int):
+    def transform_action(self, action:int):
         """
             Updated coordinates of bbox by applied move or resized to the bounding box based on the action and alpha.
 
@@ -347,29 +376,141 @@ class BaseDetectionEnv(Env, ABC):
             Close any opened render windows.
         """
         cv2.destroyAllWindows()
+        
+    
+    @property
+    def current_gt_bboxes(self):
+        """
+            Return list of ground-truth bboxes.
+
+            Returns:
+                list[list[float]]
+        """ 
+        if isinstance(self.gt_bbox[0], (list, tuple)):
+            return self.gt_bbox
+        return [self.gt_bbox]
     
     
 class CenterEnv(BaseDetectionEnv):
     def _init_spaces(self):
-        pass
+        """
+            Initialize the action and observation spaces for the Center agent.
+
+            Action space:
+                Discrete(self.center_actions)
+            Observation space:
+                Box(low=0.0, high=1.0, shape=(D,), dtype=float) where D = 4 + history_size*base_actions
+
+            Returns:
+                None
+        """
+        self.action_space = spaces.Discrete(self.center_actions)
+        dim = 4 + self.history_size * self.base_actions
+        self.observation_space = spaces.Box(0.0, 1.0, shape=(dim,), dtype=np.float32)
     
     
     def _get_state(self):
-        pass
+        """
+            Build and return the current observation for the Center agent.
+
+            The state vector concatenates:
+                - normalized bbox coordinates [x1/W, y1/H, x2/W, y2/H]
+                - flattened history of past base actions
+
+            Returns:
+                np.ndarray: 1D array of length D = 4 + history_size*base_actions
+        """
+        x1, y1, x2, y2 = self.bbox
+        norm = [x1/self.width, y1/self.height, x2/self.width, y2/self.height]
+        history = [v for rec in self.action_history for v in rec]
+        return np.array(norm + history, dtype=np.float32)
     
-    
-    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
-        pass
+    def calculate_reward(self, new_bbox, prev_bbox, target_bboxes):
+        """
+            Compute reward for a base action in the Center phase.
+
+            Uses Euclidean distance between bbox center and ground truth center:
+                +1.0 if distance to GT decreases after action
+                -1.0 otherwise
+
+            Args:
+                new_bbox (list[int]): bbox after the action
+                prev_bbox (list[int]): bbox before the action
+                target_bboxes (list[list[int]]): list of ground-truth boxes
+
+
+            Returns:
+                float: reward value based on center distance improvement
+        """
+        
+        # helper to compute center of a bbox
+        def _center(b):
+            return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+        
+        cx_prev, cy_prev = _center(prev_bbox)
+        cx_new, cy_new = _center(new_bbox)
+        cx_gt, cy_gt = _center(target_bboxes[0])
+        
+        # compute Euclidean distances
+        dis_prev = np.hypot(cx_prev - cx_gt, cy_prev - cy_gt)
+        dis_new = np.hypot(cx_new - cx_gt, cy_new - cy_gt)
+        
+        return 1.0 if dis_new < dis_prev else -1.0
 
 class SizeEnv(BaseDetectionEnv):
     def _init_spaces(self):
-        pass
+        """
+            Initialize the action and observation spaces for the Size agent.
+
+            Action space:
+                Discrete(self.size_actions)
+            Observation space:
+                Box(low=0.0, high=1.0, shape=(D,), dtype=float) where D = 4 + history_size*base_actions
+
+            Returns:
+                None
+        """
+        
+        self.action_space = spaces.Discrete(self.size_actions)
+        dim = 4 + self.history_size * self.base_actions
+        self.observation_space = spaces.Box(0.0, 1.0, shape=(dim,), dtype=np.float32)
     
     
     def _get_state(self):
-        pass
+        """
+            Build and return the current observation for the Size agent.
+
+            The state vector concatenates:
+                - normalized bbox coordinates [x1/W, y1/H, x2/W, y2/H]
+                - flattened history of past base actions
+
+            Returns:
+                np.ndarray: 1D array of length D = 4 + history_size*base_actions
+        """
+        x1, y1, x2, y2 = self.bbox
+        norm = [x1/self.width, y1/self.height, x2/self.width, y2/self.height]
+        history = [v for rec in self.action_history for v in rec]
+        return np.array(norm + history, dtype=np.float32)
     
     
-    def _calc_reward(self, prev_bbox: list, curr_bbox: list) -> float:
-        pass
+    def calculate_reward(self, new_bbox, prev_bbox, target_bboxes, phase):
+        """
+        Compute reward for a base action in the Size phase.
+
+        Uses IoU improvement as metric:
+            +1.0 if IoU(new_bbox, GT) > IoU(prev_bbox, GT)
+            -1.0 otherwise
+
+        Args:
+            new_bbox (list[int]): bbox after the action
+            prev_bbox (list[int]): bbox before the action
+            target_bboxes (list[list[int]]): list of ground-truth boxes
+            phase (str): 'size'
+
+        Returns:
+            float: reward value
+        """
+        prev_iou = calculate_iou(prev_bbox, target_bboxes[0])
+        new_iou  = calculate_iou(new_bbox, target_bboxes[0])
+        return 1.0 if new_iou > prev_iou else -1.0
     
