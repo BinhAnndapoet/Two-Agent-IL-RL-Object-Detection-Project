@@ -39,3 +39,38 @@ def select_expert_action_center(env, current_bbox, target_bbox):
     ]
     valid_actions = [a[0] for a in actions if a[1]]
     return random.choice(valid_actions) if valid_actions else 4
+
+
+def select_expert_action_size(env, current_bbox, target_bbox):
+    """
+    Select optimal action for SizeDQNAgent based on ground truth.
+
+    Args:
+        env (DetectionEnv): Environment instance.
+        current_bbox (list): Current bounding box [x1, y1, x2, y2].
+        target_bbox (list): Ground truth bounding box [x1, y1, x2, y2].
+
+    Returns:
+        int: Optimal action (0: bigger, 1: smaller, 2: fatter, 3: taller, 4: trigger).
+    """
+    current_width = current_bbox[2] - current_bbox[0]
+    current_height = current_bbox[3] - current_bbox[1]
+    target_width = target_bbox[2] - target_bbox[0]
+    target_height = target_bbox[3] - target_bbox[1]
+    alpha_w = env.alpha * current_width
+    alpha_h = env.alpha * current_height
+
+    # If size is close enough, trigger
+    if (abs(current_width - target_width) < alpha_w and 
+        abs(current_height - target_height) < alpha_h):
+        return 4  # Trigger
+
+    # Choose action to adjust size
+    actions = [
+        (0, current_width < target_width and current_height < target_height),  # Bigger
+        (1, current_width > target_width and current_height > target_height),  # Smaller
+        (2, current_height > target_height),  # Fatter
+        (3, current_width > target_width)     # Taller
+    ]
+    valid_actions = [a[0] for a in actions if a[1]]
+    return random.choice(valid_actions) if valid_actions else 4
