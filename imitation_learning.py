@@ -116,3 +116,33 @@ def generate_expert_trajectory(env, num_trajectories=1000):
             if done:
                 break
     return trajectories
+
+
+def initialize_replay_buffer(env, il_model_center, il_model_size, replay_buffer, num_transitions=1000):
+    """
+    Initialize replay buffer with IL transitions using trained IL models.
+
+    Args:
+        env (DetectionEnv): Environment instance.
+        il_model_center (ILModel): IL model for center phase.
+        il_model_size (ILModel): IL model for size phase.
+        replay_buffer (ReplayBuffer): Replay buffer to initialize.
+        num_transitions (int): Number of transitions to generate.
+    """
+    il_model_center.eval()
+    il_model_size.eval()
+    for _ in range(num_transitions):
+        obs, _ = env.reset()
+        target_bbox = env.current_gt_bboxes[env.current_gt_index]   # Không dùng nhưng có thể giữ lại nếu muốn thêm vấn đề IOU
+        while True:
+            model = il_model_center if env.phase == 'center' else il_model_size
+            with torch.no_grad():
+                state = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
+                action_probs = model(state)
+                action = torch.argmax(action_probs, dim=1).item()
+            new_obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+            replay_buffer.append(Transition(obs, action, reward, done, new_obs))
+            obs = new_obs
+            if done:
+                break
