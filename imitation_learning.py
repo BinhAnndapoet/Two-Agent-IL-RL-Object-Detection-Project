@@ -74,3 +74,45 @@ def select_expert_action_size(env, current_bbox, target_bbox):
     ]
     valid_actions = [a[0] for a in actions if a[1]]
     return random.choice(valid_actions) if valid_actions else 4
+
+
+def generate_expert_trajectory(env, num_trajectories=1000):
+    """
+    Generate expert trajectories using ground truth for IL.
+
+    Args:
+        env (DetectionEnv): Environment instance.
+        num_trajectories (int): Number of trajectories to generate.
+
+    Returns:
+        dict: Trajectories for center and size phases {'center': [], 'size': []}.
+    """
+    trajectories = {'center': [], 'size': []}
+    for _ in range(num_trajectories):
+        obs, _ = env.reset()
+        trajectory_center = []
+        trajectory_size = []
+        target_bbox = env.current_gt_bboxes[env.current_gt_index]
+        
+        while True:
+            if env.phase == 'center':
+                action = select_expert_action_center(env, env.bbox, target_bbox)
+                new_obs, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                trajectory_center.append(Transition(obs, action, reward, done, new_obs))
+                obs = new_obs
+                if env.phase == 'size' or done:
+                    trajectories['center'].extend(trajectory_center)
+                    trajectory_center = []
+            else:
+                action = select_expert_action_size(env, env.bbox, target_bbox)
+                new_obs, reward, terminated, truncated, _ = env.step(action)
+                done = terminated or truncated
+                trajectory_size.append(Transition(obs, action, reward, done, new_obs))
+                obs = new_obs
+                if done:
+                    trajectories['size'].extend(trajectory_size)
+                    break
+            if done:
+                break
+    return trajectories
