@@ -46,20 +46,20 @@ class Replay_Buffer():
         pass
 
 def iou():
-        """
-            Calculating the IoU between two bounding boxes.
+    """
+        Calculating the IoU between two bounding boxes.
 
-            Formula:
-                IoU(b, g) = area(b ∩ g) / area(b U g)
+        Formula:
+            IoU(b, g) = area(b ∩ g) / area(b U g)
 
-            Args:
-                bbox1: The first bounding box.
-                target_bbox: The second bounding box.
+        Args:
+            bbox1: The first bounding box.
+            target_bbox: The second bounding box.
 
-            Returns:
-                The IoU between the two bounding boxes.
+        Returns:
+            The IoU between the two bounding boxes.
 
-        """
+    """
     pass
 
 def recall():
