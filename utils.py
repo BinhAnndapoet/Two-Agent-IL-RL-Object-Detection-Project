@@ -3,6 +3,7 @@ import torch
 import random
 import numpy as np
 import pandas as pd
+import cv2
 from collections import namedtuple, deque
 
 
@@ -29,6 +30,25 @@ class ReplayBuffer():
             transition (Transition): Transition to store.
         """
         self.memory.append(transition)
+
+    def sample_batch(self):
+        """
+        Sample a batch of transitions.
+
+        Returns:
+            tuple: Batched (states, actions, rewards, dones, next_states).
+        """
+        batch = random.sample(self.memory, self.batch_size)
+        batch = Transition(*zip(*batch))
+        states = torch.from_numpy(np.array(batch.state, dtype=np.float32))
+        actions = torch.from_numpy(np.array(batch.action, dtype=np.int64)).unsqueeze(1)
+        rewards = torch.from_numpy(np.array(batch.reward, dtype=np.float32)).unsqueeze(1)
+        dones = torch.from_numpy(np.array(batch.done, dtype=np.bool8)).unsqueeze(1).to(torch.bool)
+        next_states = torch.from_numpy(np.array(batch.next_state, dtype=np.float32))
+        return states, actions, rewards, dones, next_states
+    
+    def __len__(self):
+        return len(self.memory)
 
 
 def transform_input(image, target_size):
