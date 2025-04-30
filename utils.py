@@ -1,171 +1,82 @@
+import os
 import torch
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# The target update frequency is the frequency with which the target network is updated.
-TARGET_UPDATE_FREQ = 5
-
-# Epsilon start, epsilon end and epsilon decay are the parameters for the epsilon greedy exploration strategy.
-EPS_START = 1.0
-EPS_END = 0.01
-EPS_DECAY = 0.999
-
-# Exploration Modes
-RANDOM_EXPLORE = 0
-GUIDED_EXPLORE = 1
-# Setting Exploration Mode
-EXPLORATION_MODE = RANDOM_EXPLORE
-
-# The learning rate α ∈ (0, 1] controls how much we update our current value estimates towards newly received returns.
-ALPHA = 1e-4
+import random
+import numpy as np
+import pandas as pd
+from collections import namedtuple, deque
 
 
-class Replay_Buffer():
+# Transition named tuple
+Transition = namedtuple('Transition', ('state', 'action', 'reward', 'done', 'next_state'))
+
+class ReplayBuffer():
     """
-        The replay buffer stores the transitions that the agent observes, allowing us to reuse this data later.
+    Replay buffer for storing and sampling transitions.
+
+    Args:
+        capacity (int): Maximum number of transitions to store.
+    """
+    def __init__(self, capacity=BUFFER_SIZE, batch_size=BATCH_SIZE):
+        self.capacity = capacity
+        self.memory = deque(maxlen=capacity)
+        self.batch_size = batch_size
+
+    def append(self, transition):
+        """
+        Add a transition to the buffer.
 
         Args:
-            env: The environment to interact with
-            fullsize: The maximum size of the replay buffer
-            minsize: The minimum size of the replay buffer before the agent starts learning
-            batchsize: The batch size used for training
+            transition (Transition): Transition to store.
+        """
+        self.memory.append(transition)
+
+
+def transform_input(image, target_size):
     """
-    def __init__(self):
-        pass
+    Transform image for feature extraction.
 
-    def append(self):
-        """ Appends a transition to the replay buffer """
-        pass
+    Args:
+        image (np.ndarray): Input image.
+        target_size (tuple): Target size (width, height).
 
-    def sample_batch(self):
-        """ Samples a batch of transitions from the replay buffer """
-        pass
-        
-    def initialize(self):
-        """ Initializes the replay buffer by sampling transitions from the environment """
-        pass
-
-def iou():
+    Returns:
+        torch.Tensor: Transformed image tensor.
     """
-        Calculating the IoU between two bounding boxes.
+    image = cv2.resize(image, target_size)
+    image = image / 255.0
+    image = np.transpose(image, (2, 0, 1))
+    return torch.tensor(image, dtype=torch.float32)
 
-        Formula:
-            IoU(b, g) = area(b ∩ g) / area(b U g)
-
-        Args:
-            bbox1: The first bounding box.
-            target_bbox: The second bounding box.
-
-        Returns:
-            The IoU between the two bounding boxes.
-
+def iou(box1, box2):
     """
-    pass
+    Calculate IoU between two bounding boxes.
 
-def recall():
+    Args:
+        box1 (list): First box [x1, y1, x2, y2].
+        box2 (list): Second box [x1, y1, x2, y2].
+
+    Returns:
+        float: IoU value.
     """
-        Calculating the recall between two bounding boxes.
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union = area1 + area2 - intersection
+    return intersection / union if union > 0 else 0
 
-        Formula:
-            Recall(b, g) = area(b ∩ g) / area(g)
-
-        Args:
-            bbox: The first bounding box.
-            target_bbox: The second bounding box.
-
-        Returns:
-            The recall between the two bounding boxes.
+def calculate_best_iou(pred_boxes, gt_boxes):
     """
-    pass
+    Calculate the best IoU for predicted boxes against ground truth.
 
-def calculate_best_iou():
+    Args:
+        pred_boxes (list): Predicted boxes.
+        gt_boxes (list): Ground truth boxes.
+
+    Returns:
+        float: Maximum IoU.
     """
-        Calculating the best IoU between the bounding boxes and the ground truth boxes.
-
-        Args:
-            bounding_boxes: The predicted bounding boxes.
-            gt_boxes: The ground truth bounding boxes.
-
-        Returns:
-            The best IoU between the bounding boxes and the ground truth boxes.
-    """
-    pass
-
-def calculate_best_recall():
-    """
-        Calculating the best recall between the bounding boxes and the ground truth boxes.
-
-        Args:
-            bounding_boxes: The predicted bounding boxes.
-            gt_boxes: The ground truth bounding boxes.
-
-        Returns:
-            The best recall between the bounding boxes and the ground truth boxes.
-    """
-    pass
-
-def calculate_precision_recall():
-    """
-        Calculating the precision and recall using the Intersection over Union (IoU) and according to the threshold between the ground truths and the predictions.
-
-        Args:
-            bounding_boxes: The predicted bounding boxes.
-            gt_boxes: The ground truth bounding boxes.
-            ovthresh: The IoU threshold.
-
-        Returns:
-            precision (tp / (tp + fp))
-            recall (tp / (tp + fn))
-            f1 score (2 * (precision * recall) / (precision + recall))
-            average IoU (sum of IoUs / number of bounding boxes)
-            average precision (sum of precisions / number of bounding boxes)
-    """
-    pass
-
-def voc_ap():
-    """
-    Calculating the Average Precision (AP) and Recall.
-
-        Args:
-            rec: Array of recall values.
-            prec: Array of precision values.
-            voc2007: Boolean flag indicating whether to use the method recommended by the PASCAL VOC 2007 paper (11-point method).
-
-        Returns:
-            The average precision (AP).
-
-        More information:
-        - If voc2007 is True, then the method recommended by the PASCAL VOC 2007 paper (11-point method) is used.
-        - If voc2007 is False, then the method recommended by the PASCAL VOC 2010 paper is used.
-    """
-    pass
-
-def calculate_class_detection_metrics(current_class, bounding_boxes, gt_boxes, ovthresh):
-    """
-        Calculating the VOC detection metric.
-
-        Args:
-            current_class: The current class/label.
-            bounding_boxes: The predicted bounding boxes.
-            gt_boxes: The ground truth bounding boxes.
-            ovthresh: The IoU threshold.
-
-        Returns:
-            The average precision.
-    """
-    pass
-
-def calculate_detection_metrics():#list(np.arange(0.5, 0.95, 0.05))):
-    """
-    Calculating the detection metrics for all the classes.
-
-        Args:
-            results_path: Path to the directory containing detection results.
-            threshold_list: List of IoU thresholds to evaluate detection metrics.
-
-        Returns:
-            dfs: An array of pandas dataframes containing the detection metrics for each class at given IoU thresholds.
-            mAps: The mean average precision for each class at given IoU thresholds.
-            pre_rec_f1: Precision, recall, and F1-score for each class at given IoU thresholds.
-    """
-    pass
+    return max(iou(pred, gt) for pred in pred_boxes for gt in gt_boxes)
