@@ -17,6 +17,8 @@
     They can be overridden via the `env_config` passed to constructors; missing keys fall back to defaults.
 """
 
+from utils import iou
+
 from abc import ABC, abstractmethod
 from gymnasium import Env, spaces
 import gymnasium as gym
@@ -42,35 +44,6 @@ DEFAULT_OBJ_CONFIG      = 0         # Object configuration: 0=SINGLE_OBJ, 1=MULT
 DEFAULT_CENTER_ACTIONS  = 24        # 4 move + 1 trigger + 10 class + 3 conf + 2 done
 DEFAULT_SIZE_ACTIONS    = 12        # 4 resize + 1 trigger + 3 conf + 4 aspect
 DEFAULT_BASE_ACTIONS    = 4         # Number of base move/resize actions before trigger
-
-
-def calculate_iou(bbox1, bbox2):
-    """  
-        * Args:
-            - bbox1 (list[float]) : [x1, y1, x2, y2] - first bbox coordinates
-            - bbox2 (list[float]) : [x1, y1, x2, y2] - second bbox coordinates
-        * Returns:
-            - float: IoU = area(intersection) / area(union), in [0.0, 1.0]
-    """
-    x1 = max(bbox1[0], bbox2[0])
-    y1 = max(bbox1[1], bbox2[1])
-    x2 = max(bbox1[2], bbox2[2])
-    y2 = max(bbox1[3], bbox2[3])
-    
-    inter_w = max(0, x2 - x1)
-    inter_h = max(y2 - y1)
-    inter_area = inter_w * inter_h
-    
-    area1 = max(0, (bbox1[2] - bbox1[0])) * max(0, (bbox1[3] - bbox1[1]))
-    area2 = max(0, (bbox2[2] - bbox2[0])) * max(0, (bbox2[3] - bbox2[1]))
-    union = area1 + area2 - inter_area
-    
-    if union > 0: 
-        IoU = (inter_area / union)
-    else:
-        IoU = 0.0    
-    
-    return IoU
 
 
 class BaseDetectionEnv(Env, ABC):
