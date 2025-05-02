@@ -41,9 +41,9 @@ DEFAULT_OBJ_CONFIG      = 0         # Object configuration: 0=SINGLE_OBJ, 1=MULT
     - For CenterEnv: 4 base movement actions + trigger + 10 class prediction + 3 confidence bins + 2 done flags = 24 total
     - For SizeEnv: 4 resize actions + trigger + 3 conf bins + 4 aspect choices + 1 done flag? (simplified to 12)
 """
-DEFAULT_CENTER_ACTIONS  = 24        # 4 move + 1 trigger + 10 class + 3 conf + 2 done
-DEFAULT_SIZE_ACTIONS    = 12        # 4 resize + 1 trigger + 3 conf + 4 aspect
-DEFAULT_BASE_ACTIONS    = 4         # Number of base move/resize actions before trigger
+DEFAULT_CENTER_ACTIONS  = 37        # 4 base action (move) + 1 trigger  + 1 conf + 1 done + n class (20 - VOC)
+DEFAULT_SIZE_ACTIONS    = 6         # 4 base action (aspect) + 1 trigger + 1 conf 
+DEFAULT_BASE_ACTIONS    = 4         # Number of base move/aspect actions before trigger
 
 
 class BaseDetectionEnv(Env, ABC):
