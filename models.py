@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
+import torchvision.models as models, ResNet18_Weights
 
 """
     Architecture of the Vanilla (Standard) DQN model.
