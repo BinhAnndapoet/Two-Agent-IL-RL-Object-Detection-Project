@@ -5,7 +5,7 @@ import numpy as np
 import random
 from env import DetectionEnv
 from models import ILModel
-from utils import Transition
+from utils import Transition, ReplayBuffer
 
 def select_expert_action_center(env, current_bbox, target_bbox):
     """
@@ -39,7 +39,6 @@ def select_expert_action_center(env, current_bbox, target_bbox):
     ]
     valid_actions = [a[0] for a in actions if a[1]]
     return random.choice(valid_actions) if valid_actions else 4
-
 
 def select_expert_action_size(env, current_bbox, target_bbox):
     """
@@ -75,12 +74,13 @@ def select_expert_action_size(env, current_bbox, target_bbox):
     valid_actions = [a[0] for a in actions if a[1]]
     return random.choice(valid_actions) if valid_actions else 4
 
-
-def generate_expert_trajectory(env, num_trajectories=1000):
+def generate_expert_trajectory(center_agent, size_agent, env, num_trajectories=1000):
     """
     Generate expert trajectories using ground truth for IL.
 
     Args:
+        center_agent (CenterDQNAgent): Agent for center phase.
+        size_agent (SizeDQNAgent): Agent for size phase.
         env (DetectionEnv): Environment instance.
         num_trajectories (int): Number of trajectories to generate.
 
@@ -96,7 +96,7 @@ def generate_expert_trajectory(env, num_trajectories=1000):
         
         while True:
             if env.phase == 'center':
-                action = select_expert_action_center(env, env.bbox, target_bbox)
+                action = center_agent.expert_agent_action_selection(use_ground_truth=True, target_bbox=target_bbox)
                 new_obs, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 trajectory_center.append(Transition(obs, action, reward, done, new_obs))
@@ -105,7 +105,7 @@ def generate_expert_trajectory(env, num_trajectories=1000):
                     trajectories['center'].extend(trajectory_center)
                     trajectory_center = []
             else:
-                action = select_expert_action_size(env, env.bbox, target_bbox)
+                action = size_agent.expert_agent_action_selection(use_ground_truth=True, target_bbox=target_bbox)
                 new_obs, reward, terminated, truncated, _ = env.step(action)
                 done = terminated or truncated
                 trajectory_size.append(Transition(obs, action, reward, done, new_obs))
@@ -117,6 +117,38 @@ def generate_expert_trajectory(env, num_trajectories=1000):
                 break
     return trajectories
 
+def train_il_model(env, trajectories, phase='center', epochs=100):
+    """
+    Train IL model using expert trajectories.
+
+    Args:
+        env (DetectionEnv): Environment instance.
+        trajectories (list): Expert transitions.
+        phase (str): Phase ('center' or 'size').
+        epochs (int): Number of training epochs.
+
+    Returns:
+        ILModel: Trained IL model.
+    """
+    ninputs = env.get_state().shape[1]
+    noutputs = env.action_space.n  # NUMBER_OF_ACTIONS_CENTER or NUMBER_OF_ACTIONS_SIZE
+    model = ILModel(ninputs, noutputs).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.CrossEntropyLoss()
+
+    for epoch in range(epochs):
+        total_loss = 0
+        for t in trajectories:
+            state = torch.tensor(t.state, dtype=torch.float32).unsqueeze(0).to(device)
+            action = torch.tensor(t.action, dtype=torch.long).to(device)
+            pred = model(state)
+            loss = criterion(pred, action)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+        print(f"Epoch {epoch+1}/{epochs}, Phase: {phase}, Loss: {total_loss/len(trajectories):.4f}")
+    return model
 
 def initialize_replay_buffer(env, il_model_center, il_model_size, replay_buffer, num_transitions=1000):
     """
