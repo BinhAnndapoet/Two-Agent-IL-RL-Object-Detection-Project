@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torchvision.models as models
 
 """
     Architecture of the Vanilla (Standard) DQN model.
@@ -57,8 +58,8 @@ class DQN(nn.Module):
 class Resnet18FeatureExtractor(nn.Module):
     """Extract multi-scale features from images using ResNet-18."""
     def __init__(self):
-        super(FeatureExtractor, self).__init__()
-        resnet = models.resnet18(pretrained=True)
+        super(Resnet18FeatureExtractor, self).__init__()
+        resnet = models.resnet18(weights=ResNet18_Weights.DEFAULT)
         self.conv1 = resnet.conv1
         self.bn1 = resnet.bn1
         self.relu = resnet.relu
