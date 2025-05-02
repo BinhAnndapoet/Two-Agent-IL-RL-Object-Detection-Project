@@ -67,7 +67,7 @@ def transform_input(image, target_size):
     image = np.transpose(image, (2, 0, 1))
     return torch.tensor(image, dtype=torch.float32)
 
-def iou(box1, box2):
+def calculate_iou(box1, box2):
     """
     Calculate IoU between two bounding boxes.
 

@@ -17,7 +17,7 @@
     They can be overridden via the `env_config` passed to constructors; missing keys fall back to defaults.
 """
 
-from utils import iou
+from utils import calculate_iou
 
 from abc import ABC, abstractmethod
 from gymnasium import Env, spaces
