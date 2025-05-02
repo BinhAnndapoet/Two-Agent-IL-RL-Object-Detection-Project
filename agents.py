@@ -332,10 +332,6 @@ class CenterDQNAgent(DQNAgent):
             int: Expert-selected action (0: right, 1: left, 2: up, 3: down, 4: trigger).
         """
         if use_ground_truth:
-            if target_bbox is None:
-                target_bboxes = self.env.current_gt_bboxes
-                ious = [self.env.calculate_iou(self.env.bbox, gt) for gt in target_bboxes]
-                target_bbox = target_bboxes[np.argmax(ious)]
             return select_expert_action_center(self.env, self.env.bbox, target_bbox)
         else:
             return super().expert_agent_action_selection(use_ground_truth=False)
@@ -366,10 +362,6 @@ class SizeDQNAgent(DQNAgent):
             int: Expert-selected action (0: bigger, 1: smaller, 2: fatter, 3: taller, 4: trigger).
         """
         if use_ground_truth:
-            if target_bbox is None:
-                target_bboxes = self.env.current_gt_bboxes
-                ious = [self.env.calculate_iou(self.env.bbox, gt) for gt in target_bboxes]
-                target_bbox = target_bboxes[np.argmax(ious)]
             return select_expert_action_size(self.env, self.env.bbox, target_bbox)
         else:
             return super().expert_agent_action_selection(use_ground_truth=False)
