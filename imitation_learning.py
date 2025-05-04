@@ -132,15 +132,15 @@ def train_il_model(env, trajectories, phase='center', epochs=100):
     """
     ninputs = env.get_state().shape[1]
     noutputs = env.action_space.n  # NUMBER_OF_ACTIONS_CENTER or NUMBER_OF_ACTIONS_SIZE
-    model = ILModel(ninputs, noutputs).to(device)
+    model = ILModel(ninputs, noutputs).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.CrossEntropyLoss()
 
     for epoch in range(epochs):
         total_loss = 0
         for t in trajectories:
-            state = torch.tensor(t.state, dtype=torch.float32).unsqueeze(0).to(device)
-            action = torch.tensor(t.action, dtype=torch.long).to(device)
+            state = torch.tensor(t.state, dtype=torch.float32).unsqueeze(0).to(DEVICE)
+            action = torch.tensor(t.action, dtype=torch.long).to(DEVICE)
             pred = model(state)
             loss = criterion(pred, action)
             optimizer.zero_grad()
@@ -169,7 +169,7 @@ def initialize_replay_buffer(env, il_model_center, il_model_size, replay_buffer,
         while True:
             model = il_model_center if env.phase == 'center' else il_model_size
             with torch.no_grad():
-                state = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
+                state = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(DEVICE)
                 action_probs = model(state)
                 action = torch.argmax(action_probs, dim=1).item()
             new_obs, reward, terminated, truncated, _ = env.step(action)
