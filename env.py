@@ -262,7 +262,27 @@ class DetectionEnv(gym.Env):
         return state.reshape(1, -1)
     
     def extract(self):
-        pass
+        """
+        Extract image and ground truth from dataset.
+        """
+        extracted_imgs = self.dataset[self.current_class]
+        if self.class_image_index >= len(extracted_imgs):
+            self.class_image_index = 0
+            self.epochs += 1
+            print(f"\033[92mEpoch {self.epochs} done for class {self.current_class}.\033[0m")
+        img_name = list(extracted_imgs.keys())[self.class_image_index]
+        img_info = extracted_imgs[img_name][0]
+        self.image = np.array(img_info[0])
+        self.original_image = self.image.copy()
+        self.height = self.image.shape[0]
+        self.width = self.image.shape[1]
+        gt_bboxes_dict = [item for sublist in img_info[1:] for item in sublist]
+        gt_bboxes_dict = [gt_bboxes_dict[i] for i in range(len(gt_bboxes_dict)) if i % 2 == 0]
+        self.current_gt_bboxes = [[int(b['xmin']), int(b['ymin']), int(b['xmax']), int(b['ymax'])] for b in gt_bboxes_dict]
+        self.target_bbox = self.current_gt_bboxes[0]
+        self.class_image_index += 1
+        if self.env_mode == 1:  # TEST_MODE
+            self.evaluation_results['gt_boxes'][img_name] = self.current_gt_bboxes
     
     def get_info(self):
         return {
