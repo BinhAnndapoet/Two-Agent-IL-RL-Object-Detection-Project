@@ -99,4 +99,4 @@ def calculate_best_iou(pred_boxes, gt_boxes):
     Returns:
         float: Maximum IoU.
     """
-    return max(iou(pred, gt) for pred in pred_boxes for gt in gt_boxes)
+    return max(calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes)
