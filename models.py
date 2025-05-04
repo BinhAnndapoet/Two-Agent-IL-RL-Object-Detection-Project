@@ -99,8 +99,41 @@ class Resnet18FeatureExtractor(nn.Module):
         x = self.layer4(x)   # [B, 512, H/32, W/32]
         high_level.append(x) # High-level: semantics
 
-        return {
-            'low': low_level,    # List of low-level features
-            'mid': mid_level,    # List of mid-level features
-            'high': high_level   # List of high-level features
-        }
+        return x
+
+        # return {
+        #     'low': low_level,    # List of low-level features
+        #     'mid': mid_level,    # List of mid-level features
+        #     'high': high_level   # List of high-level features
+        # }
+
+class ILModel(nn.Module):
+    """
+    Imitation Learning model for predicting optimal actions.
+
+    Args:
+        ninputs (int): Input dimension.
+        noutputs (int): Number of actions.
+    """
+    def __init__(self, ninputs, noutputs):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Linear(ninputs, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, noutputs),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, x):
+        """
+        Forward pass.
+
+        Args:
+            x (torch.Tensor): Input state tensor.
+
+        Returns:
+            torch.Tensor: Action probabilities.
+        """
+        return self.network(x)
