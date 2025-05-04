@@ -41,8 +41,8 @@ class DQNAgent():
         self.exploration_mode = exploration_mode
         self.ninputs = env.get_state().shape[1]
         self.noutputs = env.action_space.n
-        self.policy_net = network(self.ninputs, self.noutputs).to(device)
-        self.target_net = network(self.ninputs, self.noutputs).to(device)
+        self.policy_net = network(self.ninputs, self.noutputs).to(DEVICE)
+        self.target_net = network(self.ninputs, self.noutputs).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=ALPHA)
@@ -86,7 +86,7 @@ class DQNAgent():
                 action = self.env.action_space.sample()
         else:
             with torch.no_grad():
-                state = torch.from_numpy(state).float().unsqueeze(0).to(device)
+                state = torch.from_numpy(state).float().unsqueeze(0).to(DEVICE)
                 qvalues = self.policy_net(state)
                 action = qvalues.argmax().item()
         return action
@@ -131,11 +131,11 @@ class DQNAgent():
             "next_states": (BATCH_SIZE, 1, self.ninputs)
         }
 
-        states = states.to(device)
-        actions = actions.to(device)
-        rewards = rewards.to(device)
-        dones = dones.to(device)
-        next_states = next_states.to(device)
+        states = states.to(DEVICE)
+        actions = actions.to(DEVICE)
+        rewards = rewards.to(DEVICE)
+        dones = dones.to(DEVICE)
+        next_states = next_states.to(DEVICE)
         qvalues = self.policy_net(states.squeeze(1)).gather(1, actions)
 
         with torch.no_grad():
@@ -257,7 +257,7 @@ class DQNAgent():
         test_iou = []
         test_recall = []
         while True:
-            action = int(torch.argmax(self.policy_net(torch.from_numpy(obs).float().unsqueeze(0).to(device))).item())
+            action = int(torch.argmax(self.policy_net(torch.from_numpy(obs).float().unsqueeze(0).to(DEVICE))).item())
             obs, _, terminated, truncated, info = self.env.step(action)
             frame = self.env.render() if self.env.render_mode else self.env.display(mode='trigger_image')
             frames.append(frame)
@@ -300,8 +300,8 @@ class DQNAgent():
     #             raise FileNotFoundError(f"Missing file: {path}/{file}")
     #     self.policy_net.load_state_dict(torch.load(f"{path}/policy_net.pth"))
     #     self.target_net.load_state_dict(torch.load(f"{path}/target_net.pth"))
-    #     self.policy_net.to(device)
-    #     self.target_net.to(device)
+    #     self.policy_net.to(DEVICE)
+    #     self.target_net.to(DEVICE)
     #     self.optimizer.load_state_dict(torch.load(f"{path}/optimizer.pth"))
     #     self.episode_info = np.load(f"{path}/episode_info.npy", allow_pickle=True).item()
     #     self.epsilon = EPS_END

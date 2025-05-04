@@ -6,6 +6,61 @@ import pandas as pd
 import cv2
 from collections import namedtuple, deque
 
+# hyperparameters
+DEVICE  = 'cuda' if torch.cuda.is_available() else 'cpu'
+BUFFER_SIZE             = 0
+BATCH_SIZE              = 0
+NUM_IL_TRAJECTORIES     = 0
+NUM_IL_EPOCHS           = 0
+REPLAY_BUFFER_CAPACITY  = 0
+TARGET_UPDATE_FREQ      = None
+EXPLORATION_MODE        = None
+ALPHA                   = 0
+EPS_START               = 0
+GUIDED_EXPLORE          = 0
+GAMMA                   = 0
+EPS_END                 = 0
+EPS_DECAY               = 0
+SUCCESS_CRITERIA_EPS    = 0
+NU                      = 0
+THRESHOLD               = 0
+MAX_STEPS               = 0
+TRIGGER_STEPS           = 0
+NUMBER_ACTIONS          = 0
+ACTION_HISTORY_SIZE     = 0
+OBJ_CONFIG              = None
+N_CLASSES               = 0
+TARGET_SIZE             = (0, 0)
+FEATURE_DIM             = 0
+USE_DATASET             = True
+ENV_MODE                = None
+EPOCHS                  = 0
+CURRENT_CLASSES         = 0
+WINDOW_SIZE             = 0
+DATASET                 = 0
+
+env_config = {
+    "dataset" : DATASET,
+    "alpha" : ALPHA,
+    "nu" : NU,
+    "threshold" : THRESHOLD,
+    "max_steps" : MAX_STEPS,
+    "trigger_steps" : TRIGGER_STEPS,
+    "number_actions" : NUMBER_ACTIONS,
+    "action_history_size" : ACTION_HISTORY_SIZE,
+    "object_config" : OBJ_CONFIG,
+    "n_classes" : N_CLASSES,
+    "target_size" : TARGET_SIZE,
+    "feature_dim" : FEATURE_DIM,
+    "device" : DEVICE,
+    "use_dataset" : USE_DATASET,
+    "env_mode" : ENV_MODE,
+    "epochs" : EPOCHS,
+    "current_class" : CURRENT_CLASSES,
+    'window_size' : CURRENT_CLASSES
+}
+
+
 
 # Transition named tuple
 Transition = namedtuple('Transition', ('state', 'action', 'reward', 'done', 'next_state'))

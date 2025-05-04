@@ -5,7 +5,7 @@ import numpy as np
 import random
 from env import DetectionEnv
 from models import ILModel
-from utils import Transition, ReplayBuffer
+from utils import *
 
 def select_expert_action_center(env, current_bbox, target_bbox):
     """

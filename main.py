@@ -3,8 +3,8 @@ import numpy as np
 import os
 from env import DetectionEnv
 from agents import CenterDQNAgent, SizeDQNAgent
-from utils import ReplayBuffer
-from IL import generate_expert_trajectory, train_il_model, initialize_replay_buffer
+from utils import * 
+from imitation_learning import generate_expert_trajectory, train_il_model, initialize_replay_buffer
 
 def train_imitation_learning(env):
     """
