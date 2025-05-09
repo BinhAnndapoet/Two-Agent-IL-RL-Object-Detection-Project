@@ -69,6 +69,8 @@ class Resnet18FeatureExtractor(nn.Module):
         self.layer2 = resnet.layer2
         self.layer3 = resnet.layer3
         self.layer4 = resnet.layer4
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.flatten = nn.Flatten()
 
     def forward(self, x):
         """
@@ -99,6 +101,9 @@ class Resnet18FeatureExtractor(nn.Module):
         x = self.layer4(x)   # [B, 512, H/32, W/32]
         high_level.append(x) # High-level: semantics
 
+        # x = self.pool(x)
+        # x = self.flatten(x)
+
         return x
 
         # return {
@@ -107,33 +112,46 @@ class Resnet18FeatureExtractor(nn.Module):
         #     'high': high_level   # List of high-level features
         # }
 
+
 class ILModel(nn.Module):
     """
-    Imitation Learning model for predicting optimal actions.
-
-    Args:
-        ninputs (int): Input dimension.
-        noutputs (int): Number of actions.
+    Imitation Learning model for Center and Size Agents with multiple outputs.
     """
-    def __init__(self, ninputs, noutputs):
-        super().__init__()
-        self.network = nn.Sequential(
-            nn.Linear(ninputs, 512),
+    def __init__(self, input_dim, phase="center", n_classes=20):
+        super(ILModel, self).__init__()
+        self.phase = phase
+        self.n_classes = n_classes
+        hidden_dim1 = 256
+        hidden_dim2 = 128
+        
+        # Common backbone
+        self.backbone = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim1),
             nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, noutputs),
-            nn.Softmax(dim=-1)
+            nn.Linear(hidden_dim1, hidden_dim2),
+            nn.ReLU()
         )
+        
+        if self.phase == "center":
+            # Outputs: (Δx, Δy), class_probs, conf, done
+            self.pos_head = nn.Linear(hidden_dim2, 4)  # 4 actions: right, left, up, down
+            self.class_head = nn.Linear(hidden_dim2, n_classes)  # 20 classes
+            self.conf_head = nn.Linear(hidden_dim2, 1)  # Confidence
+            self.done_head = nn.Linear(hidden_dim2, 1)  # Done signal
+        else:
+            # Outputs: (Δh, Δw), conf_size
+            self.size_head = nn.Linear(hidden_dim2, 4)  # 4 actions: bigger, smaller, fatter, taller
+            self.conf_head = nn.Linear(hidden_dim2, 1)  # Confidence
 
     def forward(self, x):
-        """
-        Forward pass.
-
-        Args:
-            x (torch.Tensor): Input state tensor.
-
-        Returns:
-            torch.Tensor: Action probabilities.
-        """
-        return self.network(x)
+        x = self.backbone(x)
+        if self.phase == "center":
+            pos = self.pos_head(x)
+            class_probs = self.class_head(x)
+            conf = self.conf_head(x)
+            done = self.done_head(x)
+            return pos, class_probs, conf, done
+        else:
+            size = self.size_head(x)
+            conf = self.conf_head(x)
+            return size, conf
