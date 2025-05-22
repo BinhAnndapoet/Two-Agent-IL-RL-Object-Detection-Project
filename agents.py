@@ -60,7 +60,7 @@ class DQNAgent:
         self.n_classes = n_classes
         self.phase = "center" if name == "CenterDQN" else "size"
         self.ninputs = env.get_state().shape[1]
-        self.noutputs = env.action_space.n
+        self.n_pos_outputs = env.action_space.n if self.phase == "size" else 4  # Chỉnh sửa
         self.policy_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(DEVICE)
         self.target_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
