@@ -105,13 +105,13 @@ def calculate_iou(box1, box2):
     union = area1 + area2 - intersection
     return intersection / union if union > 0 else 0
 
-# def calculate_best_iou(pred_boxes, gt_boxes):
-#     return max(calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes) if pred_boxes and gt_boxes else 0.0
+def calculate_best_iou(pred_boxes, gt_boxes):
+    return max(calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes) if pred_boxes and gt_boxes else 0.0
 
-# def calculate_best_recall(pred_boxes, gt_boxes):
-#     iou_threshold = 0.5
-#     ious = [calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes]
-#     return sum(1 for iou in ious if iou >= iou_threshold) / len(gt_boxes) if gt_boxes else 0.0
+def calculate_best_recall(pred_boxes, gt_boxes):
+    iou_threshold = 0.5
+    ious = [calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes]
+    return sum(1 for iou in ious if iou >= iou_threshold) / len(gt_boxes) if gt_boxes else 0.0
 
 def calculate_map(pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
     """
