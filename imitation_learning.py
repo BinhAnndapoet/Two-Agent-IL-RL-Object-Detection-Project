@@ -140,7 +140,7 @@ def generate_expert_trajectory(center_agent, size_agent, env, replay_buffer, num
                 else:
                     size_action = select_expert_action_size(env, env.bbox, target_bbox)
                     action = size_action
-                    conf = 1.0 if size_action == 5 else 0.0
+                    conf = 1.0 if size_action == 4 else 0.0
                     new_obs, reward, terminated, truncated, info = env.step(action)
                     done_flag = terminated or truncated
                     trajectories['size'].append((obs, size_action, conf))
