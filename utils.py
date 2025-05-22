@@ -5,94 +5,77 @@ import numpy as np
 import pandas as pd
 import cv2
 from collections import namedtuple, deque
+from sklearn.metrics import average_precision_score
 
-# hyperparameters
-DEVICE  = 'cuda' if torch.cuda.is_available() else 'cpu'
-BUFFER_SIZE             = 0
-BATCH_SIZE              = 0
-NUM_IL_TRAJECTORIES     = 0
-NUM_IL_EPOCHS           = 0
-REPLAY_BUFFER_CAPACITY  = 0
-TARGET_UPDATE_FREQ      = None
-EXPLORATION_MODE        = None
-ALPHA                   = 0
-EPS_START               = 0
-GUIDED_EXPLORE          = 0
-GAMMA                   = 0
-EPS_END                 = 0
-EPS_DECAY               = 0
-SUCCESS_CRITERIA_EPS    = 0
-NU                      = 0
-THRESHOLD               = 0
-MAX_STEPS               = 0
-TRIGGER_STEPS           = 0
-NUMBER_ACTIONS          = 0
-ACTION_HISTORY_SIZE     = 0
-OBJ_CONFIG              = None
-N_CLASSES               = 0
-TARGET_SIZE             = (0, 0)
-FEATURE_DIM             = 0
-USE_DATASET             = True
-ENV_MODE                = None
-EPOCHS                  = 0
-CURRENT_CLASSES         = 0
-WINDOW_SIZE             = 0
-DATASET                 = 0
+# Hyperparameters
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+BUFFER_SIZE = 10000
+BATCH_SIZE = 64
+NUM_IL_TRAJECTORIES = 100
+NUM_IL_EPOCHS = 100
+REPLAY_BUFFER_CAPACITY = 10000
+TARGET_UPDATE_FREQ = 100
+EXPLORATION_MODE = 'GUIDED_EXPLORE'
+ALPHA = 0.001
+EPS_START = 0.9
+GUIDED_EXPLORE = 'GUIDED_EXPLORE'
+GAMMA = 0.99
+EPS_END = 0.05
+EPS_DECAY = 0.999
+SUCCESS_CRITERIA_EPS = 1000
+NU = 0.5
+THRESHOLD = 0.6
+MAX_STEPS = 200
+TRIGGER_STEPS = 10
+NUMBER_ACTIONS = 6
+ACTION_HISTORY_SIZE = 7
+OBJ_CONFIG = 'MULTI_OBJECT'
+N_CLASSES = 20
+TARGET_SIZE = (448, 448)
+FEATURE_DIM = 512
+USE_DATASET = True
+ENV_MODE = 0
+EPOCHS = 100
+CURRENT_CLASSES = None
+WINDOW_SIZE = (448, 448)
+DATASET = None
 
 env_config = {
-    "dataset" : DATASET,
-    "alpha" : ALPHA,
-    "nu" : NU,
-    "threshold" : THRESHOLD,
-    "max_steps" : MAX_STEPS,
-    "trigger_steps" : TRIGGER_STEPS,
-    "number_actions" : NUMBER_ACTIONS,
-    "action_history_size" : ACTION_HISTORY_SIZE,
-    "object_config" : OBJ_CONFIG,
-    "n_classes" : N_CLASSES,
-    "target_size" : TARGET_SIZE,
-    "feature_dim" : FEATURE_DIM,
-    "device" : DEVICE,
-    "use_dataset" : USE_DATASET,
-    "env_mode" : ENV_MODE,
-    "epochs" : EPOCHS,
-    "current_class" : CURRENT_CLASSES,
-    'window_size' : CURRENT_CLASSES
+    "dataset": DATASET,
+    "alpha": ALPHA,
+    "nu": NU,
+    "threshold": THRESHOLD,
+    "max_steps": MAX_STEPS,
+    "trigger_steps": TRIGGER_STEPS,
+    "number_actions": NUMBER_ACTIONS,
+    "action_history_size": ACTION_HISTORY_SIZE,
+    "object_config": OBJ_CONFIG,
+    "n_classes": N_CLASSES,
+    "target_size": TARGET_SIZE,
+    "feature_dim": FEATURE_DIM,
+    "device": DEVICE,
+    "use_dataset": USE_DATASET,
+    "env_mode": ENV_MODE,
+    "epochs": EPOCHS,
+    "current_class": CURRENT_CLASSES,
+    "window_size": WINDOW_SIZE
 }
-
-
 
 # Transition named tuple
 Transition = namedtuple('Transition', ('state', 'action', 'reward', 'done', 'next_state'))
 
-class ReplayBuffer():
-    """
-    Replay buffer for storing and sampling transitions.
-
-    Args:
-        capacity (int): Maximum number of transitions to store.
-    """
-    def __init__(self, capacity=BUFFER_SIZE, batch_size=BATCH_SIZE):
+class ReplayBuffer:
+    def __init__(self, capacity=REPLAY_BUFFER_CAPACITY, batch_size=BATCH_SIZE):
         self.capacity = capacity
         self.memory = deque(maxlen=capacity)
         self.batch_size = batch_size
+        self.rewards = deque(maxlen=capacity)
 
     def append(self, transition):
-        """
-        Add a transition to the buffer.
-
-        Args:
-            transition (Transition): Transition to store.
-        """
         self.memory.append(transition)
+        self.rewards.append(transition.reward)
 
     def sample_batch(self):
-        """
-        Sample a batch of transitions.
-
-        Returns:
-            tuple: Batched (states, actions, rewards, dones, next_states).
-        """
         batch = random.sample(self.memory, self.batch_size)
         batch = Transition(*zip(*batch))
         states = torch.from_numpy(np.array(batch.state, dtype=np.float32))
@@ -101,38 +84,17 @@ class ReplayBuffer():
         dones = torch.from_numpy(np.array(batch.done, dtype=np.bool8)).unsqueeze(1).to(torch.bool)
         next_states = torch.from_numpy(np.array(batch.next_state, dtype=np.float32))
         return states, actions, rewards, dones, next_states
-    
+
     def __len__(self):
         return len(self.memory)
 
-
 def transform_input(image, target_size):
-    """
-    Transform image for feature extraction.
-
-    Args:
-        image (np.ndarray): Input image.
-        target_size (tuple): Target size (width, height).
-
-    Returns:
-        torch.Tensor: Transformed image tensor.
-    """
     image = cv2.resize(image, target_size)
     image = image / 255.0
     image = np.transpose(image, (2, 0, 1))
     return torch.tensor(image, dtype=torch.float32)
 
 def calculate_iou(box1, box2):
-    """
-    Calculate IoU between two bounding boxes.
-
-    Args:
-        box1 (list): First box [x1, y1, x2, y2].
-        box2 (list): Second box [x1, y1, x2, y2].
-
-    Returns:
-        float: IoU value.
-    """
     x1 = max(box1[0], box2[0])
     y1 = max(box1[1], box2[1])
     x2 = min(box1[2], box2[2])
@@ -143,15 +105,81 @@ def calculate_iou(box1, box2):
     union = area1 + area2 - intersection
     return intersection / union if union > 0 else 0
 
-def calculate_best_iou(pred_boxes, gt_boxes):
-    """
-    Calculate the best IoU for predicted boxes against ground truth.
+# def calculate_best_iou(pred_boxes, gt_boxes):
+#     return max(calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes) if pred_boxes and gt_boxes else 0.0
 
-    Args:
-        pred_boxes (list): Predicted boxes.
-        gt_boxes (list): Ground truth boxes.
+# def calculate_best_recall(pred_boxes, gt_boxes):
+#     iou_threshold = 0.5
+#     ious = [calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes]
+#     return sum(1 for iou in ious if iou >= iou_threshold) / len(gt_boxes) if gt_boxes else 0.0
 
-    Returns:
-        float: Maximum IoU.
+def calculate_map(pred_boxes, pred_labels, pred_scores, gt_boxes, gt_labels):
     """
-    return max(calculate_iou(pred, gt) for pred in pred_boxes for gt in gt_boxes)
+    Calculate mean Average Precision (mAP) at IoU=0.5.
+    """
+    if not pred_boxes or not gt_boxes or not pred_labels or not gt_labels or not pred_scores:
+        return 0.0
+    if len(pred_boxes) != len(pred_labels) or len(pred_boxes) != len(pred_scores):
+        print("Warning: Mismatch in pred_boxes, pred_labels, or pred_scores lengths")
+        return 0.0
+
+    iou_threshold = 0.5
+    classes = list(set(gt_labels))
+    ap_scores = []
+
+    for cls in classes:
+        pred_cls_mask = [lbl == cls for lbl in pred_labels]
+        gt_cls_mask = [lbl == cls for lbl in gt_labels]
+
+        if not any(pred_cls_mask) or not any(gt_cls_mask):
+            continue
+
+        pred_cls_boxes = [pred_boxes[i] for i in range(len(pred_boxes)) if pred_cls_mask[i]]
+        pred_cls_scores = [pred_scores[i] for i in range(len(pred_scores)) if pred_cls_mask[i]]
+        gt_cls_boxes = [gt_boxes[i] for i in range(len(gt_boxes)) if gt_cls_mask[i]]
+
+        # Sort predictions by score
+        sorted_indices = np.argsort(pred_cls_scores)[::-1]
+        pred_cls_boxes = [pred_cls_boxes[i] for i in sorted_indices]
+        pred_cls_scores = [pred_cls_scores[i] for i in sorted_indices]
+
+        # Calculate TP and FP
+        true_positives = np.zeros(len(pred_cls_boxes))
+        false_positives = np.zeros(len(pred_cls_boxes))
+        matched_gt = set()
+
+        for i, pred_box in enumerate(pred_cls_boxes):
+            max_iou = 0
+            max_gt_idx = -1
+            for j, gt_box in enumerate(gt_cls_boxes):
+                if j in matched_gt:
+                    continue
+                iou = calculate_iou(pred_box, gt_box)
+                if iou > max_iou:
+                    max_iou = iou
+                    max_gt_idx = j
+
+            if max_iou >= iou_threshold and max_gt_idx != -1:
+                true_positives[i] = 1
+                matched_gt.add(max_gt_idx)
+            else:
+                false_positives[i] = 1
+
+        # Calculate precision and recall
+        cum_tp = np.cumsum(true_positives)
+        cum_fp = np.cumsum(false_positives)
+        precisions = cum_tp / (cum_tp + cum_fp + 1e-6)
+        recalls = cum_tp / len(gt_cls_boxes) if gt_cls_boxes else np.zeros_like(cum_tp)
+
+        # Calculate AP using 11-point interpolation
+        ap = 0
+        for t in np.arange(0, 1.1, 0.1):
+            if np.sum(recalls >= t) == 0:
+                p = 0
+            else:
+                p = np.max(precisions[recalls >= t])
+            ap += p / 11.0
+
+        ap_scores.append(ap)
+
+    return np.mean(ap_scores) if ap_scores else 0.0
