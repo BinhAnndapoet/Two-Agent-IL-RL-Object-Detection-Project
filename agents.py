@@ -11,9 +11,6 @@ import time
 import cv2
 
 class DQN(nn.Module):
-    """
-    Deep Q-Network with multiple outputs for Center and Size Agents.
-    """
     def __init__(self, input_dim, n_outputs, phase="center", n_classes=20):
         super(DQN, self).__init__()
         self.phase = phase
@@ -32,13 +29,13 @@ class DQN(nn.Module):
         )
 
         if self.phase == "center":
-            self.pos_head = nn.Linear(hidden_dim3, 4)  # Actions: right, left, up, down
-            self.class_head = nn.Linear(hidden_dim3, n_classes)  # Class predictions
-            self.conf_head = nn.Linear(hidden_dim3, 1)  # Confidence score
-            self.done_head = nn.Linear(hidden_dim3, 1)  # Trigger action
+            self.pos_head = nn.Linear(hidden_dim3, 4)
+            self.class_head = nn.Linear(hidden_dim3, n_classes)
+            self.conf_head = nn.Linear(hidden_dim3, 1)
+            self.done_head = nn.Linear(hidden_dim3, 1)
         else:
-            self.size_head = nn.Linear(hidden_dim3, 4)  # Actions: bigger, smaller, fatter, taller
-            self.conf_head = nn.Linear(hidden_dim3, 1)  # Confidence score
+            self.size_head = nn.Linear(hidden_dim3, 4)
+            self.conf_head = nn.Linear(hidden_dim3, 1)
 
     def forward(self, x):
         x = self.backbone(x)
@@ -54,9 +51,6 @@ class DQN(nn.Module):
             return size_q, conf_q
 
 class DQNAgent:
-    """
-    Base DQN agent for interacting with DetectionEnv in object detection tasks.
-    """
     def __init__(self, env, replay_buffer, target_update_freq=TARGET_UPDATE_FREQ,
                  criterion=nn.SmoothL1Loss(), name="DQN", exploration_mode=EXPLORATION_MODE, n_classes=20):
         self.env = env
@@ -105,51 +99,64 @@ class DQNAgent:
                 action = self.expert_agent_action_selection(use_ground_truth=False)
             else:
                 action = self.env.action_space.sample()
+            if self.phase == "center":
+                pos_action, class_action = action
+                return pos_action, class_action if pos_action < 4 else None
+            return action, None
         else:
             with torch.no_grad():
                 state = torch.from_numpy(state).float().unsqueeze(0).to(DEVICE)
                 if self.phase == "center":
                     pos_q, class_q, conf_q, done_q = self.policy_net(state)
                     pos_action = torch.argmax(pos_q, dim=1).item()
-                    class_action = torch.argmax(class_q, dim=1).item() + 6
+                    class_action = torch.argmax(class_q, dim=1).item()
                     conf_action = 5 if conf_q.item() > 0 else None
                     done_action = 4 if done_q.item() > 0 else None
                     if done_action is not None:
-                        action = done_action
+                        return done_action, None
                     elif conf_action is not None:
-                        action = conf_action
-                    elif torch.max(pos_q).item() > torch.max(class_q).item():
-                        action = pos_action
+                        return conf_action, None
                     else:
-                        action = class_action
+                        return pos_action, class_action
                 else:
                     size_q, conf_q = self.policy_net(state)
                     size_action = torch.argmax(size_q, dim=1).item()
                     conf_action = 5 if conf_q.item() > 0 else None
-                    action = conf_action if conf_action is not None else size_action
-        return action
+                    return conf_action if conf_action is not None else size_action, None
 
     def expert_agent_action_selection(self, use_ground_truth=False, target_bbox=None):
         if use_ground_truth and target_bbox is not None:
             if self.phase == "center":
                 target_label = self.env.current_gt_labels[self.env.current_gt_index]
-                return select_expert_action_center(self.env, self.env.bbox, target_bbox, target_label)
+                pos_action, _, _, _ = select_expert_action_center(self.env, self.env.bbox, target_bbox, target_label)
+                class_action = self.env.get_class_names().index(target_label)
+                return pos_action, class_action
             else:
-                return select_expert_action_size(self.env, self.env.bbox, target_bbox)
+                return select_expert_action_size(self.env, self.env.bbox, target_bbox), None
 
         positive_actions = []
         negative_actions = []
+        positive_class_actions = []
+        negative_class_actions = []
         old_state = self.env.bbox
         target_bboxes = [bbox for idx, bbox in enumerate(self.env.current_gt_bboxes) if idx not in self.env.detected_objects]
         target_labels = [label for idx, label in enumerate(self.env.current_gt_labels) if idx not in self.env.detected_objects]
         for action in range(self.noutputs):
             new_state = self.env.transform_action(action, self.env.phase)
             reward = self.env.calculate_reward([new_state], [old_state], target_bboxes, target_labels, self.env.phase) if action < self.noutputs - 2 else self.env.calculate_trigger_reward([new_state], target_bboxes)
-            if reward > 0:
-                positive_actions.append(action)
+            if self.phase == "center" and action >= 6:
+                if reward > 0:
+                    positive_class_actions.append(action)
+                else:
+                    negative_class_actions.append(action)
             else:
-                negative_actions.append(action)
-        return random.choice(positive_actions) if positive_actions else random.choice(negative_actions)
+                if reward > 0:
+                    positive_actions.append(action)
+                else:
+                    negative_actions.append(action)
+        pos_action = random.choice(positive_actions) if positive_actions else random.choice(negative_actions)
+        class_action = random.choice(positive_class_actions) if positive_class_actions else random.choice(negative_class_actions) if negative_class_actions else None
+        return pos_action, class_action if self.phase == "center" else None
 
     def update(self):
         if len(self.replay_buffer) < BATCH_SIZE:
@@ -241,7 +248,7 @@ class DQNAgent:
                 episode_reward += reward
                 done = terminated or truncated
 
-                transition = Transition(obs, action, reward, done, new_obs)
+                transition = Transition(obs, action[0], reward, done, new_obs)
                 self.replay_buffer.append(transition)
 
                 obs = new_obs
@@ -366,7 +373,8 @@ class CenterDQNAgent(DQNAgent):
         if use_ground_truth and target_bbox is not None:
             target_label = self.env.current_gt_labels[self.env.current_gt_index]
             pos_action, _, _, _ = select_expert_action_center(self.env, self.env.bbox, target_bbox, target_label)
-            return pos_action
+            class_action = self.env.get_class_names().index(target_label)
+            return pos_action, class_action
         return super().expert_agent_action_selection(use_ground_truth=False)
 
 class SizeDQNAgent(DQNAgent):
@@ -376,5 +384,5 @@ class SizeDQNAgent(DQNAgent):
 
     def expert_agent_action_selection(self, use_ground_truth=False, target_bbox=None):
         if use_ground_truth and target_bbox is not None:
-            return select_expert_action_size(self.env, self.env.bbox, target_bbox)
+            return select_expert_action_size(self.env, self.env.bbox, target_bbox), None
         return super().expert_agent_action_selection(use_ground_truth=False)
