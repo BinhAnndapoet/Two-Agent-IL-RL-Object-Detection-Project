@@ -2,7 +2,8 @@ import os
 import torch
 import numpy as np
 from utils import ReplayBuffer, env_config, calculate_map
-from dataset import load_pascal_voc
+# from dataset import load_pascal_voc
+from dataset2 import load_pascal_voc
 from env import DetectionEnv
 from imitation_learning import initialize_replay_buffer
 from agents import CenterDQNAgent, SizeDQNAgent
