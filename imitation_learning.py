@@ -157,17 +157,64 @@ def train_il_model(env, trajectories, phase='center', epochs=100, batch_size=64)
             states = torch.tensor([t[0] for t in batch], dtype=torch.float32).to(device)
             assert states.shape[1] == ninputs, f"State shape {states.shape} does not match expected input_dim {ninputs}"
             optimizer.zero_grad()
+            
             if phase == 'center':
                 pos_actions = torch.tensor([t[1] for t in batch], dtype=torch.long).to(device)
                 class_actions = torch.tensor([t[2] for t in batch], dtype=torch.long).to(device)
                 confs = torch.tensor([t[3] for t in batch], dtype=torch.float32).to(device)
                 dones = torch.tensor([t[4] for t in batch], dtype=torch.float32).to(device)
                 pos_pred, class_pred, conf_pred, done_pred = model(states)
+                
+                # Position loss
                 valid_pos = (pos_actions >= 0) & (pos_actions < 4)
                 L_pos = pos_criterion(
                     pos_pred[valid_pos].gather(1, pos_actions[valid_pos].unsqueeze(1)),
                     torch.ones_like(pos_pred[valid_pos].gather(1, pos_actions[valid_pos].unsqueeze(1)))
                 ) if valid_pos.any() else torch.tensor(0.0, device=device)
-                L_class = class_criterion(class_pred, class_actions)
+                
+                # Classification loss
+                valid_class = (class_actions >= 0) & (class_actions < n_classes)
+                L_class = class_criterion(class_pred[valid_class], class_actions[valid_class]) if valid_class.any() else torch.tensor(0.0, device=device)
+                
+                # Confidence loss
                 L_conf = bce_criterion(conf_pred.squeeze(), confs)
-                L_done = b
+                
+                # Done loss
+                L_done = bce_criterion(done_pred.squeeze(), dones)
+                
+                # Total loss
+                loss = 0.4 * L_pos + 0.3 * L_class + 0.15 * L_conf + 0.15 * L_done
+            else:
+                size_actions = torch.tensor([t[1] for t in batch], dtype=torch.long).to(device)
+                confs = torch.tensor([t[2] for t in batch], dtype=torch.float32).to(device)
+                size_pred, conf_pred = model(states)
+                
+                # Size loss
+                valid_size = (size_actions >= 0) & (size_actions < 4)
+                L_size = pos_criterion(
+                    size_pred[valid_size].gather(1, size_actions[valid_size].unsqueeze(1)),
+                    torch.ones_like(size_pred[valid_size].gather(1, size_actions[valid_size].unsqueeze(1)))
+                ) if valid_size.any() else torch.tensor(0.0, device=device)
+                
+                # Confidence loss
+                L_conf = bce_criterion(conf_pred.squeeze(), confs)
+                
+                # Total loss
+                loss = 0.6 * L_size + 0.4 * L_conf
+
+            total_loss += loss.item()
+            loss.backward()
+            optimizer.step()
+        
+        avg_loss = total_loss / (len(trajectories[phase]) / batch_size)
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch + 1}/{epochs}, Phase: {phase}, Average Loss: {avg_loss:.4f}")
+
+    return model
+
+def initialize_replay_buffer(env, center_agent, size_agent, num_trajectories=1000):
+    replay_buffer = ReplayBuffer()
+    trajectories = generate_expert_trajectory(center_agent, size_agent, env, replay_buffer, num_trajectories)
+    center_model = train_il_model(env, trajectories, phase='center')
+    size_model = train_il_model(env, trajectories, phase='size')
+    return replay_buffer, center_model, size_model
