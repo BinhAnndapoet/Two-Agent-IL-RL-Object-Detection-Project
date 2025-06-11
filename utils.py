@@ -8,7 +8,7 @@ from collections import namedtuple, deque
 from sklearn.metrics import average_precision_score
 
 # Hyperparameters
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 BUFFER_SIZE = 10000
 BATCH_SIZE = 64
 NUM_IL_TRAJECTORIES = 100
@@ -53,7 +53,7 @@ env_config = {
     "n_classes": N_CLASSES,
     "target_size": TARGET_SIZE,
     "feature_dim": FEATURE_DIM,
-    "device": DEVICE,
+    "device": device,
     "use_dataset": USE_DATASET,
     "env_mode": ENV_MODE,
     "epochs": EPOCHS,
