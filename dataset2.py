@@ -201,7 +201,7 @@ class PascalVOCDataset:
             root=root_dir,
             year='2012',
             image_set=split,
-            download=False  # Assume dataset is already downloaded
+            download=True  # Assume dataset is already downloaded
         )
         
         self.class_names = [
