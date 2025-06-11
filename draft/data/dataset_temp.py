@@ -24,6 +24,7 @@ class PascalVOCDataset:
         self.transform = transform or transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 1])
+        ])
         
         # Load dataset
         self.dataset = datasets.VOCDetection(
@@ -69,8 +70,7 @@ class PascalVOCDataset:
         except Exception as e:
             raise ValueError(f"Error loading image {img_id}: {e}")
         
-        # Convert image to numpy array
-(H, W, C
+        # Convert image to numpy array H, W, C
         img_np = np.array(img)
         if img_np.shape.nd == 2:  # Handle grayscale images
             img_np = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
@@ -95,7 +95,7 @@ class PascalVOCDataset:
                 
                 ymin = int(float(bbox['ymin']) * TARGET_SIZE[1] / orig_height)
                 
-                max = int(float(bbox['xmax']) * TARGET_SIZE[0] / orig_width)
+                xmax = int(float(bbox['xmax']) * TARGET_SIZE[0] / orig_width)
                 
                 ymax = int(float(bbox['ymax']) * TARGET_SIZE[1] / orig_height)
                 
