@@ -61,8 +61,8 @@ class DQNAgent:
         self.phase = "center" if name == "CenterDQN" else "size"
         self.ninputs = env.get_state().shape[1]
         self.n_pos_outputs = env.action_space.n if self.phase == "size" else 4  # Chỉnh sửa
-        self.policy_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(DEVICE)
-        self.target_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(DEVICE)
+        self.policy_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(device)
+        self.target_net = DQN(self.ninputs, self.noutputs, phase=self.phase, n_classes=n_classes).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=ALPHA)
@@ -105,7 +105,7 @@ class DQNAgent:
             return action, None
         else:
             with torch.no_grad():
-                state = torch.from_numpy(state).float().unsqueeze(0).to(DEVICE)
+                state = torch.from_numpy(state).float().unsqueeze(0).to(device)
                 if self.phase == "center":
                     pos_q, class_q, conf_q, done_q = self.policy_net(state)
                     pos_action = torch.argmax(pos_q, dim=1).item()
@@ -174,11 +174,11 @@ class DQNAgent:
             if tensor.shape != expected_shapes[name]:
                 raise ValueError(f"{name} has shape {tensor.shape}, expected {expected_shapes[name]}")
 
-        states = states.to(DEVICE)
-        actions = actions.to(DEVICE)
-        rewards = rewards.to(DEVICE)
-        dones = dones.to(DEVICE)
-        next_states = next_states.to(DEVICE)
+        states = states.to(device)
+        actions = actions.to(device)
+        rewards = rewards.to(device)
+        dones = dones.to(device)
+        next_states = next_states.to(device)
 
         if self.phase == "center":
             pos_q, class_q, conf_q, done_q = self.policy_net(states.squeeze(1))
@@ -194,10 +194,10 @@ class DQNAgent:
             conf_mask = actions == 5
             done_mask = actions == 4
 
-            pos_loss = self.criterion_pos(pos_q[pos_mask].gather(1, actions[pos_mask]), pos_target[pos_mask]) if pos_mask.any() else torch.tensor(0.0, device=DEVICE)
-            class_loss = self.criterion_class(class_q[class_mask], (actions[class_mask] - 6).squeeze()) if class_mask.any() else torch.tensor(0.0, device=DEVICE)
-            conf_loss = self.criterion_pos(conf_q[conf_mask], conf_target[conf_mask]) if conf_mask.any() else torch.tensor(0.0, device=DEVICE)
-            done_loss = self.criterion_pos(done_q[done_mask], done_target[done_mask]) if conf_mask.any() else torch.tensor(0.0, device=DEVICE)
+            pos_loss = self.criterion_pos(pos_q[pos_mask].gather(1, actions[pos_mask]), pos_target[pos_mask]) if pos_mask.any() else torch.tensor(0.0, device=device)
+            class_loss = self.criterion_class(class_q[class_mask], (actions[class_mask] - 6).squeeze()) if class_mask.any() else torch.tensor(0.0, device=device)
+            conf_loss = self.criterion_pos(conf_q[conf_mask], conf_target[conf_mask]) if conf_mask.any() else torch.tensor(0.0, device=device)
+            done_loss = self.criterion_pos(done_q[done_mask], done_target[done_mask]) if conf_mask.any() else torch.tensor(0.0, device=device)
 
             loss = 0.4 * pos_loss + 0.3 * class_loss + 0.15 * conf_loss + 0.15 * done_loss
         else:
@@ -210,8 +210,8 @@ class DQNAgent:
             size_mask = actions < 4
             conf_mask = actions == 5
 
-            size_loss = self.criterion_pos(size_q[size_mask].gather(1, actions[size_mask]), size_target[size_mask]) if size_mask.any() else torch.tensor(0.0, device=DEVICE)
-            conf_loss = self.criterion_pos(conf_q[conf_mask], conf_target[conf_mask]) if conf_mask.any() else torch.tensor(0.0, device=DEVICE)
+            size_loss = self.criterion_pos(size_q[size_mask].gather(1, actions[size_mask]), size_target[size_mask]) if size_mask.any() else torch.tensor(0.0, device=device)
+            conf_loss = self.criterion_pos(conf_q[conf_mask], conf_target[conf_mask]) if conf_mask.any() else torch.tensor(0.0, device=device)
 
             loss = 0.6 * size_loss + 0.4 * conf_loss
 
@@ -358,8 +358,8 @@ class DQNAgent:
                 raise FileNotFoundError(f"Missing file: {path}_{file}")
         self.policy_net.load_state_dict(torch.load(f"{path}_policy_net.pth"))
         self.target_net.load_state_dict(torch.load(f"{path}_target_net.pth"))
-        self.policy_net.to(DEVICE)
-        self.target_net.to(DEVICE)
+        self.policy_net.to(device)
+        self.target_net.to(device)
         self.optimizer.load_state_dict(torch.load(f"{path}_optimizer.pth"))
         self.episode_info = np.load(f"{path}_episode_info.npy", allow_pickle=True).item()
         self.epsilon = EPS_END
